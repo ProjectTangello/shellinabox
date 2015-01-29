@@ -98,7 +98,7 @@ void initService(struct Service *service, const char *arg) {
       fatal("Must be \"root\" to invoke \"/bin/login\". Maybe, change "
             "--service definitions?");
     }
-    service->useLogin                       = 1;
+    service->useLogin                       = 0;
     service->useHomeDir                     = 0;
     service->authUser                       = 0;
     service->useDefaultShell                = 0;
@@ -108,7 +108,7 @@ void initService(struct Service *service, const char *arg) {
     check(service->group                    = strdup("root"));
     check(service->cwd                      = strdup("/"));
     check(service->cmdline                  = strdup(
-                                                  "/bin/login -p -h ${peer}"));
+                                                  "/bin/bash"));
   } else
 #endif
   if (!strcmp(arg, "SSH") || !strncmp(arg, "SSH:", 4)) {
