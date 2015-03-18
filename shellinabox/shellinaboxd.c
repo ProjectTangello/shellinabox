@@ -103,10 +103,6 @@
 #define PORTNUM           4200
 #define MAX_RESPONSE      2048
 
-// Tangelo: Global variables
-static struct libwebsocket_context *wsContext;
-
-
 static int            port;
 static int            portMin;
 static int            portMax;
@@ -127,6 +123,69 @@ static struct UserCSS *userCSSList;
 static const char     *pidfile;
 static sigjmp_buf     jmpenv;
 static volatile int   exiting;
+
+// Tangelo: Web Socket Callbacks and Definitions, mostly using example libwebsockets server
+
+static struct libwebsocket_context *wsContext;
+
+enum ws_protocols {
+	/* always first */
+	PROTOCOL_HTTP = 0,
+
+	PROTOCOL_KBD,
+
+	/* always last */
+	WS_PROTOCOL_COUNT
+};
+
+// HTTP Protocol
+
+struct per_session_data__http {
+	int fd;
+};
+
+static int callback_http(struct libwebsocket_context *context,
+		struct libwebsocket *wsi,
+		enum libwebsocket_callback_reasons reason, void *user,
+							   void *in, size_t len)
+{
+	return 0;
+}
+
+// Test Protocol
+
+struct per_session_data__kbd {
+	int number;
+};
+
+static int
+callback_kbd(struct libwebsocket_context *context,
+			struct libwebsocket *wsi,
+			enum libwebsocket_callback_reasons reason,
+					       void *user, void *in, size_t len)
+{
+	return 0;
+}
+
+static struct libwebsocket_protocols wsProtocols[] = {
+	/* first protocol must always be HTTP handler */
+
+	{
+		"http-only",		/* name */
+		callback_http,		/* callback */
+		sizeof (struct per_session_data__http),	/* per_session_data_size */
+		0,			/* max frame size / rx buffer */
+	},
+	{
+		"kbd-protocol",
+		callback_kbd,
+		sizeof(struct per_session_data__kbd),
+		10,
+	},
+	{ NULL, NULL, 0, 0 } /* terminator */
+};
+
+// Tangelo: End
 
 static char *jsonEscape(const char *buf, int len) {
   static const char *hexDigit = "0123456789ABCDEF";
@@ -1308,9 +1367,18 @@ int main(int argc, char * const argv[]) {
   }
 
   // Tangelo: Initialize web socket context
-//  wsContext = libwebsocket_create_context(0);
-
-//  libwebsocket_context_destroy(wsContext);
+  struct lws_context_creation_info wsInfo;
+  memset(&wsInfo, 0, sizeof wsInfo);
+  wsInfo.port = 7681;
+  wsInfo.protocols = wsProtocols;
+  //Load SSL, test-server:897
+  wsInfo.gid = -1;
+  wsInfo.uid = -1;
+  
+  wsContext = libwebsocket_create_context(&wsInfo);
+  if (wsContext == NULL) {
+	  //TODO: Handle error
+  }
 
   // Register handlers for external files
   iterateOverHashMap(externalFiles, registerExternalFiles, server);
@@ -1332,6 +1400,8 @@ int main(int argc, char * const argv[]) {
   }
 
   // Clean up
+  // Tangelo: Cleanup context
+  libwebsocket_context_destroy(wsContext);
   deleteServer(server);
   finishAllSessions();
   deleteHashMap(externalFiles);
