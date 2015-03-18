@@ -63,6 +63,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+// Tangelo: Include libwebsockets
+#include <libwebsockets.h>
+
 #ifdef HAVE_SYS_PRCTL_H
 #include <sys/prctl.h>
 #endif
@@ -99,6 +102,10 @@
 
 #define PORTNUM           4200
 #define MAX_RESPONSE      2048
+
+// Tangelo: Global variables
+static struct libwebsocket_context *wsContext;
+
 
 static int            port;
 static int            portMin;
@@ -831,6 +838,9 @@ static void destroyExternalFileHashEntry(void *arg ATTR_UNUSED, char *key,
 }
 
 static void sigHandler(int signo, siginfo_t *info, void *context) {
+  // Tangelo: Cleanup on SIGINT
+  if (signo == SIGINT)
+	  libwebsocket_cancel_service(wsContext);
   if (exiting++) {
     _exit(1);
   }
@@ -1296,6 +1306,11 @@ int main(int argc, char * const argv[]) {
     serverRegisterHttpHandler(server, services[i]->path,
                               shellInABoxHttpHandler, services[i]);
   }
+
+  // Tangelo: Initialize web socket context
+//  wsContext = libwebsocket_create_context(0);
+
+//  libwebsocket_context_destroy(wsContext);
 
   // Register handlers for external files
   iterateOverHashMap(externalFiles, registerExternalFiles, server);

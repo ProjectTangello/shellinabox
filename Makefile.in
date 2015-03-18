@@ -381,7 +381,9 @@ BUILT_SOURCES = shellinabox/beep.h                                     \
 
 shellinaboxd_LDADD = liblogging.la                                          \
                        libhttp.la                                           \
-                       libwebsockets/lib/libwebsockets.a
+                       libwebsockets/lib/libwebsockets.a \
+                       -lssl \
+					   -lcrypto
 
 shellinaboxd_LDFLAGS = -static
 symbolname = \
