@@ -80,7 +80,7 @@ shellinaboxd_DEPENDENCIES = liblogging.la libhttp.la
 shellinaboxd_LINK = $(LIBTOOL) --tag=CC $(AM_LIBTOOLFLAGS) \
 	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
 	$(shellinaboxd_LDFLAGS) $(LDFLAGS) -o $@
-DEFAULT_INCLUDES = -I.@am__isrc@
+DEFAULT_INCLUDES = -I.@am__isrc@ -Ilibwebsockets/lib
 depcomp = $(SHELL) $(top_srcdir)/depcomp
 am__depfiles_maybe = depfiles
 am__mv = mv -f
@@ -380,7 +380,8 @@ BUILT_SOURCES = shellinabox/beep.h                                     \
                        shellinabox/vt100.js
 
 shellinaboxd_LDADD = liblogging.la                                          \
-                       libhttp.la
+                       libhttp.la                                           \
+                       libwebsockets/lib/libwebsockets.a
 
 shellinaboxd_LDFLAGS = -static
 symbolname = \

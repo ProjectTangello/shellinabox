@@ -2,3 +2,29 @@
 *.lo
 *~
 .libs
+
+# ShellInABox
+.deps/
+Makefile
+config.h
+config.log
+config.status
+*.la
+libtool
+shellinaboxd*
+stamp-h1
+shellinabox/beep.h
+shellinabox/cgi_root.h
+shellinabox/enabled.h
+shellinabox/favicon.h
+shellinabox/keyboard-layout.h
+shellinabox/keyboard.h
+shellinabox/print-styles.h
+shellinabox/root_page.h
+shellinabox/shell_in_a_box.h
+shellinabox/styles.h
+shellinabox/vt100.h
+																				 1
+# Vim
+*.swp
+*.swo
