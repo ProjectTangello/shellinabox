@@ -28,3 +28,7 @@ shellinabox/vt100.h
 # Vim
 *.swp
 *.swo
+
+# Tools
+smake
+run

@@ -140,16 +140,544 @@ enum ws_protocols {
 
 // HTTP Protocol
 
+const char * get_mimetype(const char *file)
+{
+	int n = strlen(file);
+
+	if (n < 5)
+		return NULL;
+
+	if (!strcmp(&file[n - 4], ".ico"))
+		return "image/x-icon";
+
+	if (!strcmp(&file[n - 4], ".png"))
+		return "image/png";
+
+	if (!strcmp(&file[n - 5], ".html"))
+		return "text/html";
+
+	return NULL;
+}
+
+//#define LOCAL_RESOURCE_PATH "/root/dev/shellinabox/shellinabox"
+#define LOCAL_RESOURCE_PATH "/usr/local/share/libwebsockets-test-server"
+char *resource_path = LOCAL_RESOURCE_PATH;
+
 struct per_session_data__http {
+	int useStatic;
+	int freeAfter;
+	char *stcStart;
+	char *stcMark;
+	size_t stcSize;
 	int fd;
 };
 
+static int serveStaticFile(struct libwebsocket_context *context,
+  struct libwebsocket *wsi, struct per_session_data__http *pss,
+  unsigned char *buffer, int bufferSize, unsigned char *p, unsigned char *e,
+  const char *contentType, const char *start, const char *end);
+
 static int callback_http(struct libwebsocket_context *context,
-		struct libwebsocket *wsi,
-		enum libwebsocket_callback_reasons reason, void *user,
-							   void *in, size_t len)
+  struct libwebsocket *wsi,
+    enum libwebsocket_callback_reasons reason, void *user,
+                 void *in, size_t len)
 {
-	return 0;
+  char buf[256];
+  char leaf_path[1024];
+  char b64[64];
+  struct timeval tv;
+  int n, m;
+  unsigned char *p;
+  char *other_headers;
+  static unsigned char buffer[4096];
+  struct stat stat_buf;
+  struct per_session_data__http *pss =
+      (struct per_session_data__http *)user;
+  const char *mimetype;
+  unsigned char *end;
+  switch (reason) {
+  case LWS_CALLBACK_HTTP:
+
+    // Tangelo: Check session graveyard
+    checkGraveyard();
+    //dump_handshake_info(wsi);
+
+    if (len < 1) {
+      libwebsockets_return_http_status(context, wsi,
+            HTTP_STATUS_BAD_REQUEST, NULL);
+      goto try_to_reuse;
+    }
+
+    /* this example server has no concept of directories */
+    if (strchr((const char *)in + 1, '/')) {
+      libwebsockets_return_http_status(context, wsi,
+            HTTP_STATUS_FORBIDDEN, NULL);
+      goto try_to_reuse;
+    }
+
+    /* if a legal POST URL, let it continue and accept data */
+    if (lws_hdr_total_length(wsi, WSI_TOKEN_POST_URI))
+      return 0;
+
+    /* check for the "send a big file by hand" example case */
+
+    if (!strcmp((const char *)in, "/leaf.jpg")) {
+      if (strlen(resource_path) > sizeof(leaf_path) - 10)
+        return -1;
+      sprintf(leaf_path, "%s/leaf.jpg", resource_path);
+
+      /* well, let's demonstrate how to send the hard way */
+
+      p = buffer + LWS_SEND_BUFFER_PRE_PADDING;
+      end = p + sizeof(buffer) - LWS_SEND_BUFFER_PRE_PADDING;
+#ifdef WIN32
+      pss->fd = open(leaf_path, O_RDONLY | _O_BINARY);
+#else
+      pss->fd = open(leaf_path, O_RDONLY);
+#endif
+
+      if (pss->fd < 0)
+        return -1;
+
+      if (fstat(pss->fd, &stat_buf) < 0)
+        return -1;
+
+      /*
+       * we will send a big jpeg file, but it could be
+       * anything.  Set the Content-Type: appropriately
+       * so the browser knows what to do with it.
+       * 
+       * Notice we use the APIs to build the header, which
+       * will do the right thing for HTTP 1/1.1 and HTTP2
+       * depending on what connection it happens to be working
+       * on
+       */
+      if (lws_add_http_header_status(context, wsi, 200, &p, end))
+        return 1;
+      if (lws_add_http_header_by_token(context, wsi,
+          WSI_TOKEN_HTTP_SERVER,
+              (unsigned char *)"libwebsockets",
+          13, &p, end))
+        return 1;
+      if (lws_add_http_header_by_token(context, wsi,
+          WSI_TOKEN_HTTP_CONTENT_TYPE,
+              (unsigned char *)"image/jpeg",
+          10, &p, end))
+        return 1;
+      if (lws_add_http_header_content_length(context, wsi,
+            stat_buf.st_size, &p, end))
+        return 1;
+      if (lws_finalize_http_header(context, wsi, &p, end))
+        return 1;
+
+      /*
+       * send the http headers...
+       * this won't block since it's the first payload sent
+       * on the connection since it was established
+       * (too small for partial)
+       * 
+       * Notice they are sent using LWS_WRITE_HTTP_HEADERS
+       * which also means you can't send body too in one step,
+       * this is mandated by changes in HTTP2
+       */
+
+      n = libwebsocket_write(wsi,
+          buffer + LWS_SEND_BUFFER_PRE_PADDING,
+          p - (buffer + LWS_SEND_BUFFER_PRE_PADDING),
+          LWS_WRITE_HTTP_HEADERS);
+
+      if (n < 0) {
+        close(pss->fd);
+        return -1;
+      }
+      /*
+       * book us a LWS_CALLBACK_HTTP_WRITEABLE callback
+       */
+      libwebsocket_callback_on_writable(context, wsi);
+      break;
+    }
+
+    // Tangelo: Attempt to serve files from memory
+    const char *pathInfo = (const char *)in + 1;
+//	printf("GET: %s\n", pathInfo);
+    int pathInfoLength = strlen (pathInfo);
+    if (!pathInfoLength ||
+        (pathInfoLength == 5 && !memcmp(pathInfo, "plain", 5)) ||
+        (pathInfoLength == 6 && !memcmp(pathInfo, "secure", 6))) {
+      // The root page serves the AJAX application.
+/*      if (contentType &&
+          !strncasecmp(contentType, "application/x-www-form-urlencoded", 33)) {
+        // XMLHttpRequest carrying data between the AJAX application and the
+        // client session.
+        return dataHandler(http, arg, buf, len, url);
+      }
+	  */
+      UNUSED(rootPageSize);
+//      char *html            = stringPrintf(NULL, rootPageStart,
+//                                           enableSSL ? "true" : "false");
+      char *html            = stringPrintf(NULL, rootPageStart,
+                                           "false");
+	  int ret = serveStaticFile(context, wsi, pss,
+	    (unsigned char *)buffer, sizeof(buffer), p, end,
+	    "text/html", html, strrchr(html, '\000'));
+	  if (ret)
+         return ret;
+    } else if (pathInfoLength == 8 && !memcmp(pathInfo, "beep.wav", 8)) {
+      // Serve the audio sample for the console bell.
+	  int ret = serveStaticFile(context, wsi, pss,
+	    (unsigned char *)buffer, sizeof(buffer), p, end,
+	    "audio/x-wav", beepStart, beepStart + beepSize - 1);
+	  if (ret)
+         return ret;
+    } else if (pathInfoLength == 11 && !memcmp(pathInfo, "enabled.gif", 11)) {
+      // Serve the checkmark icon used in the context menu
+	  int ret = serveStaticFile(context, wsi, pss,
+	    (unsigned char *)buffer, sizeof(buffer), p, end,
+	    "image/gif", enabledStart, enabledStart + enabledSize - 1);
+	  if (ret)
+         return ret;
+    } else if (pathInfoLength == 11 && !memcmp(pathInfo, "favicon.ico", 11)) {
+      // Serve the favicon
+	  int ret = serveStaticFile(context, wsi, pss,
+	    (unsigned char *)buffer, sizeof(buffer), p, end,
+	    "image/x-icon", faviconStart, faviconStart + faviconSize - 1);
+	  if (ret)
+         return ret;
+    } else if (pathInfoLength == 13 && !memcmp(pathInfo, "keyboard.html", 13)) {
+      // Serve the keyboard layout
+	  int ret = serveStaticFile(context, wsi, pss,
+	    (unsigned char *)buffer, sizeof(buffer), p, end,
+	    "text/html", keyboardLayoutStart, keyboardLayoutStart + keyboardLayoutSize - 1);
+	  if (ret)
+         return ret;
+    } else if (pathInfoLength == 12 && !memcmp(pathInfo, "keyboard.png", 12)) {
+      // Serve the keyboard icon
+	  int ret = serveStaticFile(context, wsi, pss,
+	    (unsigned char *)buffer, sizeof(buffer), p, end,
+	    "image/png", keyboardStart, keyboardStart + keyboardSize - 1);
+	  if (ret)
+         return ret;
+    } else if (pathInfoLength == 14 && !memcmp(pathInfo, "ShellInABox.js", 14)) {
+      // Serve both vt100.js and shell_in_a_box.js in the same transaction.
+      // Also, indicate to the client whether the server is SSL enabled.
+   /*   char *userCSSString   = getUserCSSString(userCSSList);
+      char *stateVars       = stringPrintf(NULL,
+                                           "serverSupportsSSL = %s;\n"
+                                           "disableSSLMenu    = %s;\n"
+                                           "suppressAllAudio  = %s;\n"
+                                           "linkifyURLs       = %d;\n"
+                                           "userCSSList       = %s;\n\n",
+                                           enableSSL      ? "true" : "false",
+                                           !enableSSLMenu ? "true" : "false",
+                                           noBeep         ? "true" : "false",
+                                           linkifyURLs, userCSSString);
+      free(userCSSString);
+      int stateVarsLength   = strlen(stateVars);
+      int contentLength     = stateVarsLength +
+                              vt100Size - 1 +
+                              shellInABoxSize - 1;
+      char *response        = stringPrintf(NULL,
+                               "HTTP/1.1 200 OK\r\n"
+                               "Content-Type: text/javascript; charset=utf-8\r\n"
+                               "Content-Length: %d\r\n"
+                               "\r\n",
+                               contentLength);
+      int headerLength      = strlen(response);
+      if (strcmp(httpGetMethod(http), "HEAD")) {
+        check(response      = realloc(response, headerLength + contentLength));
+        memcpy(memcpy(memcpy(
+            response + headerLength, stateVars, stateVarsLength)+stateVarsLength,
+          vt100Start, vt100Size - 1) + vt100Size - 1,
+        shellInABoxStart, shellInABoxSize - 1);
+      } else {
+        contentLength       = 0;
+      }
+      free(stateVars);
+      httpTransfer(http, response, headerLength + contentLength);
+  */  } else if (pathInfoLength == 10 && !memcmp(pathInfo, "styles.css", 10)) {
+      // Serve the style sheet.
+	  int ret = serveStaticFile(context, wsi, pss,
+	    (unsigned char *)buffer, sizeof(buffer), p, end,
+	    "text/css; charset=utf-8", cssStyleSheet, strrchr(cssStyleSheet, '\000'));
+	  if (ret)
+         return ret;
+    } else if (pathInfoLength == 16 && !memcmp(pathInfo, "print-styles.css",16)){
+      // Serve the style sheet.
+	  int ret = serveStaticFile(context, wsi, pss,
+	    (unsigned char *)buffer, sizeof(buffer), p, end,
+	    "text/css; charset=utf-8", printStylesStart, printStylesStart + printStylesSize - 1);
+	  if (ret)
+         return ret;
+    } else if (pathInfoLength > 8 && !memcmp(pathInfo, "usercss-", 8)) {
+      // Server user style sheets (if any)
+   /*   struct UserCSS *css   = userCSSList;
+      for (int idx          = atoi(pathInfo + 8);
+           idx-- > 0 && css; css = css->next ) {
+      }
+      if (css) {
+        serveStaticFile(http, "text/css; charset=utf-8",
+                        css->style, css->style + css->styleLen);
+      } else {
+        httpSendReply(http, 404, "File not found", NO_MSG);
+      }
+*/    }
+//printf("End\n");
+
+    /* if not, send a file the easy way */
+/*    strcpy(buf, resource_path);
+    if (strcmp(in, "/")) {
+      if (*((const char *)in) != '/')
+        strcat(buf, "/");
+      strncat(buf, in, sizeof(buf) - strlen(resource_path));
+    } else*/ /* default file to serve */
+/*      strcat(buf, "/test.html");
+    buf[sizeof(buf) - 1] = '\0';
+*/
+    /* refuse to serve files we don't understand */
+ /*   mimetype = get_mimetype(buf);
+    if (!mimetype) {
+      lwsl_err("Unknown mimetype for %s\n", buf);
+      libwebsockets_return_http_status(context, wsi,
+              HTTP_STATUS_UNSUPPORTED_MEDIA_TYPE, NULL);
+      return -1;
+    }
+*/
+    /* demostrates how to set a cookie on / */
+
+ /*   other_headers = NULL;
+    n = 0;
+    if (!strcmp((const char *)in, "/") &&
+         !lws_hdr_total_length(wsi, WSI_TOKEN_HTTP_COOKIE)) {
+*/      /* this isn't very unguessable but it'll do for us */
+  /*    gettimeofday(&tv, NULL);
+      n = sprintf(b64, "test=LWS_%u_%u_COOKIE;Max-Age=360000",
+        (unsigned int)tv.tv_sec,
+        (unsigned int)tv.tv_usec);
+
+      p = (unsigned char *)leaf_path;
+
+      if (lws_add_http_header_by_name(context, wsi, 
+        (unsigned char *)"set-cookie:", 
+        (unsigned char *)b64, n, &p,
+        (unsigned char *)leaf_path + sizeof(leaf_path)))
+        return 1;
+      n = (char *)p - leaf_path;
+      other_headers = leaf_path;
+    }
+*/
+ /*   n = libwebsockets_serve_http_file(context, wsi, buf,
+            mimetype, other_headers, n);
+    if (n < 0 || ((n > 0) && lws_http_transaction_completed(wsi)))
+   *///   return -1; /* error or can't reuse connection: close the socket */
+
+    /*
+     * notice that the sending of the file completes asynchronously,
+     * we'll get a LWS_CALLBACK_HTTP_FILE_COMPLETION callback when
+     * it's done
+     */
+
+    break;
+
+  case LWS_CALLBACK_HTTP_BODY:
+    strncpy(buf, in, 20);
+    buf[20] = '\0';
+    if (len < 20)
+      buf[len] = '\0';
+
+    lwsl_notice("LWS_CALLBACK_HTTP_BODY: %s... len %d\n",
+        (const char *)buf, (int)len);
+
+    break;
+
+  case LWS_CALLBACK_HTTP_BODY_COMPLETION:
+    lwsl_notice("LWS_CALLBACK_HTTP_BODY_COMPLETION\n");
+    /* the whole of the sent body arrived, close or reuse the connection */
+    libwebsockets_return_http_status(context, wsi,
+            HTTP_STATUS_OK, NULL);
+    goto try_to_reuse;
+
+  case LWS_CALLBACK_HTTP_FILE_COMPLETION:
+//    lwsl_info("LWS_CALLBACK_HTTP_FILE_COMPLETION seen\n");
+    /* kill the connection after we sent one file */
+    goto try_to_reuse;
+
+  case LWS_CALLBACK_HTTP_WRITEABLE:
+    if (pss->useStatic == 1) {
+      /*
+       * we can send more of whatever it is we were sending
+       */
+      do {
+        /* we'd like the send this much */
+        n = sizeof(buffer) - LWS_SEND_BUFFER_PRE_PADDING;
+        
+        /* but if the peer told us he wants less, we can adapt */
+        m = lws_get_peer_write_allowance(wsi);
+  
+        /* -1 means not using a protocol that has this info */
+        if (m == 0)
+          /* right now, peer can't handle anything */
+          goto later;
+  
+        if (m != -1 && m < n)
+          /* he couldn't handle that much */
+          n = m;
+        
+        //n = read(pss->fd, buffer + LWS_SEND_BUFFER_PRE_PADDING, n);
+		if (pss->stcSize < n)
+          n = pss->stcSize;
+		memcpy(buffer + LWS_SEND_BUFFER_PRE_PADDING, pss->stcMark, n);
+		pss->stcMark += n;
+		pss->stcSize -= n;
+		
+        /* problem reading, close conn */
+        if (n < 0)
+          goto bail;
+        /* sent it all, close conn */
+        if (n == 0)
+          goto flush_bail;
+        /*
+         * To support HTTP2, must take care about preamble space
+         * 
+         * identification of when we send the last payload frame
+         * is handled by the library itself if you sent a
+         * content-length header
+         */
+        m = libwebsocket_write(wsi,
+                   buffer + LWS_SEND_BUFFER_PRE_PADDING,
+                   n, LWS_WRITE_HTTP);
+        if (m < 0)
+          /* write failed, close conn */
+          goto bail;
+  
+        if (m) /* while still active, extend timeout */
+          libwebsocket_set_timeout(wsi,
+            PENDING_TIMEOUT_HTTP_CONTENT, 5);
+        
+        /* if we have indigestion, let him clear it before eating more */
+        if (lws_partial_buffered(wsi))
+          break;
+  
+      } while (!lws_send_pipe_choked(wsi));
+    } else {
+      /*
+       * we can send more of whatever it is we were sending
+       */
+      do {
+        /* we'd like the send this much */
+        n = sizeof(buffer) - LWS_SEND_BUFFER_PRE_PADDING;
+        
+        /* but if the peer told us he wants less, we can adapt */
+        m = lws_get_peer_write_allowance(wsi);
+  
+        /* -1 means not using a protocol that has this info */
+        if (m == 0)
+          /* right now, peer can't handle anything */
+          goto later;
+  
+        if (m != -1 && m < n)
+          /* he couldn't handle that much */
+          n = m;
+        
+        n = read(pss->fd, buffer + LWS_SEND_BUFFER_PRE_PADDING,
+                    n);
+        /* problem reading, close conn */
+        if (n < 0)
+          goto bail;
+        /* sent it all, close conn */
+        if (n == 0)
+          goto flush_bail;
+        /*
+         * To support HTTP2, must take care about preamble space
+         * 
+         * identification of when we send the last payload frame
+         * is handled by the library itself if you sent a
+         * content-length header
+         */
+        m = libwebsocket_write(wsi,
+                   buffer + LWS_SEND_BUFFER_PRE_PADDING,
+                   n, LWS_WRITE_HTTP);
+        if (m < 0)
+          /* write failed, close conn */
+          goto bail;
+  
+        /*
+         * http2 won't do this
+         */
+        if (m != n)
+          /* partial write, adjust */
+          if (lseek(pss->fd, m - n, SEEK_CUR) < 0)
+            goto bail;
+  
+        if (m) /* while still active, extend timeout */
+          libwebsocket_set_timeout(wsi,
+            PENDING_TIMEOUT_HTTP_CONTENT, 5);
+        
+        /* if we have indigestion, let him clear it before eating more */
+        if (lws_partial_buffered(wsi))
+          break;
+  
+      } while (!lws_send_pipe_choked(wsi));
+	}
+
+later:
+    libwebsocket_callback_on_writable(context, wsi);
+    break;
+flush_bail:
+    /* true if still partial pending */
+    if (lws_partial_buffered(wsi)) {
+      libwebsocket_callback_on_writable(context, wsi);
+      break;
+    }
+    if (pss->useStatic == 1) {
+	  if (pss->freeAfter == 1)
+	    free(pss->stcStart);
+	} else
+      close(pss->fd);
+    goto try_to_reuse;
+
+bail:
+    if (pss->useStatic == 1) {
+	  if (pss->freeAfter == 1)
+	    free(pss->stcStart);
+	} else
+      close(pss->fd);
+    return -1;
+
+  /*
+   * callback for confirming to continue with client IP appear in
+   * protocol 0 callback since no websocket protocol has been agreed
+   * yet.  You can just ignore this if you won't filter on client IP
+   * since the default uhandled callback return is 0 meaning let the
+   * connection continue.
+   */
+
+  case LWS_CALLBACK_FILTER_NETWORK_CONNECTION:
+
+    /* if we returned non-zero from here, we kill the connection */
+    break;
+
+  case LWS_CALLBACK_GET_THREAD_ID:
+    /*
+     * if you will call "libwebsocket_callback_on_writable"
+     * from a different thread, return the caller thread ID
+     * here so lws can use this information to work out if it
+     * should signal the poll() loop to exit and restart early
+     */
+
+    /* return pthread_getthreadid_np(); */
+
+    break;
+
+  default:
+    break;
+  }
+
+  return 0;
+  
+try_to_reuse:
+  if (lws_http_transaction_completed(wsi))
+    return -1;
+  return 0;
 }
 
 // Test Protocol
@@ -164,6 +692,55 @@ callback_kbd(struct libwebsocket_context *context,
 			enum libwebsocket_callback_reasons reason,
 					       void *user, void *in, size_t len)
 {
+	int n, m;
+	unsigned char buf[LWS_SEND_BUFFER_PRE_PADDING + 512 +
+						  LWS_SEND_BUFFER_POST_PADDING];
+	unsigned char *p = &buf[LWS_SEND_BUFFER_PRE_PADDING];
+	struct per_session_data__kbd *pss = (struct per_session_data__kbd *)user;
+
+	switch (reason) {
+
+	case LWS_CALLBACK_ESTABLISHED:
+		lwsl_info("callback_kbd: "
+						 "LWS_CALLBACK_ESTABLISHED\n");
+		pss->number = 0;
+		break;
+
+	case LWS_CALLBACK_SERVER_WRITEABLE:
+		n = sprintf((char *)p, "%d", pss->number++);
+		m = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
+		if (m < n) {
+			lwsl_err("ERROR %d writing to di socket\n", n);
+			return -1;
+		}
+		if (pss->number == 50) {
+			lwsl_info("close tesing limit, closing\n");
+			return -1;
+		}
+		break;
+
+	case LWS_CALLBACK_RECEIVE:
+//		fprintf(stderr, "rx %d\n", (int)len);
+		if (len < 6)
+			break;
+		if (strcmp((const char *)in, "reset\n") == 0)
+			pss->number = 0;
+		break;
+	/*
+	 * this just demonstrates how to use the protocol filter. If you won't
+	 * study and reject connections based on header content, you don't need
+	 * to handle this callback
+	 */
+
+	case LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION:
+		//dump_handshake_info(wsi);
+		/* you could return non-zero here and kill the connection */
+		break;
+
+	default:
+		break;
+	}
+
 	return 0;
 }
 
@@ -540,8 +1117,11 @@ static int dataHandler(HttpConnection *http, struct Service *service,
   return HTTP_SUSPEND;
 }
 
-static void serveStaticFile(HttpConnection *http, const char *contentType,
-                            const char *start, const char *end) {
+static int serveStaticFile(struct libwebsocket_context *context,
+  struct libwebsocket *wsi, struct per_session_data__http *pss,
+  unsigned char *buffer, int bufferSize, unsigned char *p, unsigned char *e,
+  const char *contentType, const char *start, const char *end) {
+
   char *body                     = (char *)start;
   char *bodyEnd                  = (char *)end;
 
@@ -568,8 +1148,8 @@ static void serveStaticFile(HttpConnection *http, const char *contentType,
           memcpy(tag, ptr + 4, bracket - ptr - 4);
           tag[bracket - ptr - 4] = '\000';
           condTrue               = 0;
-          const char *userAgent  = getFromHashMap(httpGetHeaders(http),
-                                                  "user-agent");
+          const char *userAgent;//  = getFromHashMap(httpGetHeaders(http),
+                                  //                "user-agent");
           if (!userAgent) {
             userAgent            = "";
           }
@@ -648,146 +1228,77 @@ static void serveStaticFile(HttpConnection *http, const char *contentType,
     free(tag);
   }
 
-  char *response   = stringPrintf(NULL,
-                                  "HTTP/1.1 200 OK\r\n"
-                                  "Content-Type: %s\r\n"
-                                  "Content-Length: %ld\r\n"
-                                  "%s\r\n",
-                                  contentType, (long)(bodyEnd - body),
+      /*                            contentType, (long)(bodyEnd - body),
                                   body == start ? "" :
                                   "Cache-Control: no-cache\r\n");
-  int len          = strlen(response);
-  if (strcmp(httpGetMethod(http), "HEAD")) {
-    check(response = realloc(response, len + (bodyEnd - body)));
-    memcpy(response + len, body, bodyEnd - body);
-    len           += bodyEnd - body;
-  }
-
+*/
   // If we expanded conditionals, we had to create a temporary copy. Delete
   // it now.
   if (body != start) {
-    free(body);
+    pss->freeAfter = 1;
+    // Tangelo: We can't delete it now because we didn't copy it over like shellinthebox used to.
+//    free(body);
   }
 
-  httpTransfer(http, response, len);
+  pss->useStatic = 1;
+//  pss->freeAfter = 1;
+  pss->stcMark = pss->stcStart = body;
+  pss->stcSize = bodyEnd - body;
+
+  p = buffer + LWS_SEND_BUFFER_PRE_PADDING;
+  e = p + bufferSize - LWS_SEND_BUFFER_PRE_PADDING;
+
+  if (lws_add_http_header_status(context, wsi, 200, &p, e))
+    return 1;
+  if (lws_add_http_header_by_token(context, wsi,
+      WSI_TOKEN_HTTP_SERVER,
+          (unsigned char *)"libwebsockets",
+      13, &p, e))
+    return 1;
+  if (lws_add_http_header_by_token(context, wsi,
+      WSI_TOKEN_HTTP_CONTENT_TYPE,
+          contentType,
+      strlen(contentType), &p, e))
+    return 1;
+  if (body != start && lws_add_http_header_by_token(context, wsi,
+      WSI_TOKEN_HTTP_CACHE_CONTROL,
+          (unsigned char *)"no-cache",
+      8, &p, e))
+    return 1;
+  if (lws_add_http_header_content_length(context, wsi,
+          pss->stcSize, &p, e))
+    return 1;
+  if (lws_finalize_http_header(context, wsi, &p, e))
+    return 1;
+
+  /*
+   * send the http headers...
+   * this won't block since it's the first payload sent
+   * on the connection since it was established * (too small for partial)
+   * 
+   * Notice they are sent using LWS_WRITE_HTTP_HEADERS
+   * which also means you can't send body too in one step,
+   * this is mandated by changes in HTTP2
+   */
+
+  int n = libwebsocket_write(wsi,
+      buffer + LWS_SEND_BUFFER_PRE_PADDING,
+      p - (buffer + LWS_SEND_BUFFER_PRE_PADDING),
+      LWS_WRITE_HTTP_HEADERS);
+
+  if (n < 0) {
+    if (pss->freeAfter == 1)
+      free(pss->stcStart);
+    return -1;
+  }
+	  
+  /*
+   * book us a LWS_CALLBACK_HTTP_WRITEABLE callback
+   */
+  libwebsocket_callback_on_writable(context, wsi);
+  return 0;
 }
 
-static int shellInABoxHttpHandler(HttpConnection *http, void *arg,
-                                  const char *buf, int len) {
-  checkGraveyard();
-  URL *url                = newURL(http, buf, len);
-  const HashMap *headers  = httpGetHeaders(http);
-  const char *contentType = getFromHashMap(headers, "content-type");
-
-  // Normalize the path info, present the final path element
-  const char *pathInfo    = urlGetPathInfo(url);
-  int pathInfoLength = 0;
-  pathInfo = strrchr (pathInfo, '/');
-  if (pathInfo) {
-    ++pathInfo;
-  } else {
-    pathInfo = "";              // Cheap way to get an empty string
-  }
-  pathInfoLength = strlen (pathInfo);
-
-  if (!pathInfoLength ||
-      (pathInfoLength == 5 && !memcmp(pathInfo, "plain", 5)) ||
-      (pathInfoLength == 6 && !memcmp(pathInfo, "secure", 6))) {
-    // The root page serves the AJAX application.
-    if (contentType &&
-        !strncasecmp(contentType, "application/x-www-form-urlencoded", 33)) {
-      // XMLHttpRequest carrying data between the AJAX application and the
-      // client session.
-      return dataHandler(http, arg, buf, len, url);
-    }
-    UNUSED(rootPageSize);
-    char *html            = stringPrintf(NULL, rootPageStart,
-                                         enableSSL ? "true" : "false");
-    serveStaticFile(http, "text/html", html, strrchr(html, '\000'));
-    free(html);
-  } else if (pathInfoLength == 8 && !memcmp(pathInfo, "beep.wav", 8)) {
-    // Serve the audio sample for the console bell.
-    serveStaticFile(http, "audio/x-wav", beepStart, beepStart + beepSize - 1);
-  } else if (pathInfoLength == 11 && !memcmp(pathInfo, "enabled.gif", 11)) {
-    // Serve the checkmark icon used in the context menu
-    serveStaticFile(http, "image/gif", enabledStart,
-                    enabledStart + enabledSize - 1);
-  } else if (pathInfoLength == 11 && !memcmp(pathInfo, "favicon.ico", 11)) {
-    // Serve the favicon
-    serveStaticFile(http, "image/x-icon", faviconStart,
-                    faviconStart + faviconSize - 1);
-  } else if (pathInfoLength == 13 && !memcmp(pathInfo, "keyboard.html", 13)) {
-    // Serve the keyboard layout
-    serveStaticFile(http, "text/html", keyboardLayoutStart,
-                    keyboardLayoutStart + keyboardLayoutSize - 1);
-  } else if (pathInfoLength == 12 && !memcmp(pathInfo, "keyboard.png", 12)) {
-    // Serve the keyboard icon
-    serveStaticFile(http, "image/png", keyboardStart,
-                    keyboardStart + keyboardSize - 1);
-  } else if (pathInfoLength == 14 && !memcmp(pathInfo, "ShellInABox.js", 14)) {
-    // Serve both vt100.js and shell_in_a_box.js in the same transaction.
-    // Also, indicate to the client whether the server is SSL enabled.
-    char *userCSSString   = getUserCSSString(userCSSList);
-    char *stateVars       = stringPrintf(NULL,
-                                         "serverSupportsSSL = %s;\n"
-                                         "disableSSLMenu    = %s;\n"
-                                         "suppressAllAudio  = %s;\n"
-                                         "linkifyURLs       = %d;\n"
-                                         "userCSSList       = %s;\n\n",
-                                         enableSSL      ? "true" : "false",
-                                         !enableSSLMenu ? "true" : "false",
-                                         noBeep         ? "true" : "false",
-                                         linkifyURLs, userCSSString);
-    free(userCSSString);
-    int stateVarsLength   = strlen(stateVars);
-    int contentLength     = stateVarsLength +
-                            vt100Size - 1 +
-                            shellInABoxSize - 1;
-    char *response        = stringPrintf(NULL,
-                             "HTTP/1.1 200 OK\r\n"
-                             "Content-Type: text/javascript; charset=utf-8\r\n"
-                             "Content-Length: %d\r\n"
-                             "\r\n",
-                             contentLength);
-    int headerLength      = strlen(response);
-    if (strcmp(httpGetMethod(http), "HEAD")) {
-      check(response      = realloc(response, headerLength + contentLength));
-      memcpy(memcpy(memcpy(
-          response + headerLength, stateVars, stateVarsLength)+stateVarsLength,
-        vt100Start, vt100Size - 1) + vt100Size - 1,
-      shellInABoxStart, shellInABoxSize - 1);
-    } else {
-      contentLength       = 0;
-    }
-    free(stateVars);
-    httpTransfer(http, response, headerLength + contentLength);
-  } else if (pathInfoLength == 10 && !memcmp(pathInfo, "styles.css", 10)) {
-    // Serve the style sheet.
-    serveStaticFile(http, "text/css; charset=utf-8",
-                    cssStyleSheet, strrchr(cssStyleSheet, '\000'));
-  } else if (pathInfoLength == 16 && !memcmp(pathInfo, "print-styles.css",16)){
-    // Serve the style sheet.
-    serveStaticFile(http, "text/css; charset=utf-8",
-                    printStylesStart, printStylesStart + printStylesSize - 1);
-  } else if (pathInfoLength > 8 && !memcmp(pathInfo, "usercss-", 8)) {
-    // Server user style sheets (if any)
-    struct UserCSS *css   = userCSSList;
-    for (int idx          = atoi(pathInfo + 8);
-         idx-- > 0 && css; css = css->next ) {
-    }
-    if (css) {
-      serveStaticFile(http, "text/css; charset=utf-8",
-                      css->style, css->style + css->styleLen);
-    } else {
-      httpSendReply(http, 404, "File not found", NO_MSG);
-    }
-  } else {
-    httpSendReply(http, 404, "File not found", NO_MSG);
-  }
-
-  deleteURL(url);
-  return HTTP_DONE;
-}
 
 static int strtoint(const char *s, int minVal, int maxVal) {
   char *ptr;
@@ -897,9 +1408,6 @@ static void destroyExternalFileHashEntry(void *arg ATTR_UNUSED, char *key,
 }
 
 static void sigHandler(int signo, siginfo_t *info, void *context) {
-  // Tangelo: Cleanup on SIGINT
-  if (signo == SIGINT)
-	  libwebsocket_cancel_service(wsContext);
   if (exiting++) {
     _exit(1);
   }
@@ -1306,13 +1814,28 @@ int main(int argc, char * const argv[]) {
 
   // Fork the launcher process, allowing us to drop privileges in the main
   // process.
-  int launcherFd  = forkLauncher();
+ // int launcherFd  = forkLauncher();
 
   // Make sure that our timestamps will print in the standard format
   setlocale(LC_TIME, "POSIX");
 
   // Create a new web server
-  Server *server;
+  // Tangelo: Create new web socket server
+  //lws_set_log_level(0, NULL);
+  struct lws_context_creation_info wsInfo;
+  memset(&wsInfo, 0, sizeof wsInfo);
+  wsInfo.port = port;
+  wsInfo.protocols = wsProtocols;
+  //Load SSL, test-server:897
+  wsInfo.gid = -1;
+  wsInfo.uid = -1;
+  
+  wsContext = libwebsocket_create_context(&wsInfo);
+  if (wsContext == NULL) {
+	  //TODO: Handle error
+  }
+
+/*  Server *server;
   if (port) {
     check(server  = newServer(localhostOnly, port));
     dropPrivileges();
@@ -1352,8 +1875,9 @@ int main(int argc, char * const argv[]) {
     closeAllFds((int []){ launcherFd, serverGetFd(server) }, 2);
     logSetLogLevel(MSG_QUIET);
   }
+  */
 
-  // Set log file format
+/*  // Set log file format
   serverSetNumericHosts(server, numericHosts ||
                         logIsQuiet() || logIsDefault());
 
@@ -1366,23 +1890,9 @@ int main(int argc, char * const argv[]) {
                               shellInABoxHttpHandler, services[i]);
   }
 
-  // Tangelo: Initialize web socket context
-  struct lws_context_creation_info wsInfo;
-  memset(&wsInfo, 0, sizeof wsInfo);
-  wsInfo.port = 7681;
-  wsInfo.protocols = wsProtocols;
-  //Load SSL, test-server:897
-  wsInfo.gid = -1;
-  wsInfo.uid = -1;
-  
-  wsContext = libwebsocket_create_context(&wsInfo);
-  if (wsContext == NULL) {
-	  //TODO: Handle error
-  }
-
   // Register handlers for external files
   iterateOverHashMap(externalFiles, registerExternalFiles, server);
-
+*/
   // Start the server
   if (!sigsetjmp(jmpenv, 1)) {
     // Clean up upon orderly shut down. Do _not_ cleanup if we die
@@ -1396,14 +1906,19 @@ int main(int argc, char * const argv[]) {
     for (int i = 0; i < sizeof(signals)/sizeof(*signals); ++i) {
       sigaction(signals[i], &sa, NULL);
     }
-    serverLoop(server);
+
+	int n = 0;
+	while (n >= 0) {
+		n = libwebsocket_service(wsContext, 50);
+	}
+   // serverLoop(server);
   }
 
   // Clean up
   // Tangelo: Cleanup context
   libwebsocket_context_destroy(wsContext);
-  deleteServer(server);
-  finishAllSessions();
+ // deleteServer(server);
+ // finishAllSessions();
   deleteHashMap(externalFiles);
   for (int i = 0; i < numServices; i++) {
     deleteService(services[i]);
