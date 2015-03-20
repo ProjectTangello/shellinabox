@@ -71,7 +71,7 @@
 
 // IE does not define XMLHttpRequest by default, so we provide a suitable
 // wrapper.
-if (typeof XMLHttpRequest == 'undefined') {
+/*if (typeof XMLHttpRequest == 'undefined') {
   XMLHttpRequest = function() {
     try { return new ActiveXObject('Msxml2.XMLHTTP.6.0');} catch (e) { }
     try { return new ActiveXObject('Msxml2.XMLHTTP.3.0');} catch (e) { }
@@ -80,6 +80,7 @@ if (typeof XMLHttpRequest == 'undefined') {
     throw new Error('');
   };
 }
+*/
 
 function extend(subClass, baseClass) {
   function inheritance() { }
@@ -88,6 +89,46 @@ function extend(subClass, baseClass) {
   subClass.prototype.constructor = subClass;
   subClass.prototype.superClass  = baseClass.prototype;
 };
+
+// From libwebsockets text.html example
+function get_appropriate_ws_url()
+{
+	var pcol;
+	var u = document.URL;
+
+	/*
+	 * We open the websocket encrypted if this page came on an
+	 * https:// url itself, otherwise unencrypted
+	 */
+
+	if (u.substring(0, 5) == "https") {
+		pcol = "wss://";
+		u = u.substr(8);
+	} else {
+		pcol = "ws://";
+		if (u.substring(0, 4) == "http")
+			u = u.substr(7);
+	}
+
+	u = u.split('/');
+
+	/* + "/xxx" bit is for IE10 workaround */
+
+	return pcol + u[0] + "/xxx";
+}
+function wsOnOpen(evt) {
+  this.shell.sendRequest();
+}
+function wsOnClose(evt) {
+  console.log("wsOnClose: " + evt.data);
+}
+function wsOnMessage(evt) {
+  console.log("wsOnMessage: " + evt.data);
+}
+function wsOnError(evt) {
+  console.log("wsOnError: " + evt.data);
+}
+
 
 function ShellInABox(url, container) {
   if (url == undefined) {
@@ -111,13 +152,31 @@ function ShellInABox(url, container) {
   this.connected    = false;
   this.superClass.constructor.call(this, container);
 
+  var wsUrl = get_appropriate_ws_url();
+
+  if (typeof MozWebSocket != "undefined") {
+    this.websocket = new MozWebSocket(wsUrl,
+      "shell-protocol");
+  } else {
+    this.websocket = new WebSocket(wsUrl,
+      "shell-protocol");
+  }
+
+  this.websocket.shell = this;
+  this.websocket.url = wsUrl;
+  this.websocket.onopen = wsOnOpen;
+  this.websocket.onclose = wsOnClose;
+  this.websocket.onmessage = wsOnMessage;
+  this.websocket.onerror = wsOnError;
+
   // We have to initiate the first XMLHttpRequest from a timer. Otherwise,
   // Chrome never realizes that the page has loaded.
-  setTimeout(function(shellInABox) {
+/*  setTimeout(function(shellInABox) {
                return function() {
-                 shellInABox.sendRequest();
+  //               shellInABox.sendRequest();
                };
              }(this), 1);
+*/
 };
 extend(ShellInABox, VT100);
 
@@ -160,30 +219,13 @@ ShellInABox.prototype.reconnect = function() {
 };
 
 ShellInABox.prototype.sendRequest = function(request) {
-  if (request == undefined) {
-    request                  = new XMLHttpRequest();
-  }
-  request.open('POST', this.url + '?', true);
-  request.setRequestHeader('Cache-Control', 'no-cache');
-  request.setRequestHeader('Content-Type',
-                           'application/x-www-form-urlencoded; charset=utf-8');
+
   var content                = 'width=' + this.terminalWidth +
                                '&height=' + this.terminalHeight +
                                (this.session ? '&session=' +
                                 encodeURIComponent(this.session) : '&rooturl='+
                                 encodeURIComponent(this.rooturl));
-  //request.setRequestHeader('Content-Length', content.length);
-
-  request.onreadystatechange = function(shellInABox) {
-    return function() {
-             try {
-               return shellInABox.onReadyStateChange(request);
-             } catch (e) {
-               shellInABox.sessionClosed();
-             }
-           }
-    }(this);
-  request.send(content);
+  this.websocket.send(content);
 };
 
 ShellInABox.prototype.onReadyStateChange = function(request) {
@@ -222,16 +264,11 @@ ShellInABox.prototype.sendKeys = function(keys) {
     keys                       = this.pendingKeys + keys;
     this.pendingKeys           = '';
     var request                = new XMLHttpRequest();
-    request.open('POST', this.url + '?', true);
-    request.setRequestHeader('Cache-Control', 'no-cache');
-    request.setRequestHeader('Content-Type',
-                           'application/x-www-form-urlencoded; charset=utf-8');
     var content                = 'width=' + this.terminalWidth +
                                  '&height=' + this.terminalHeight +
                                  '&session=' +encodeURIComponent(this.session)+
                                  '&keys=' + encodeURIComponent(keys);
-    //request.setRequestHeader('Content-Length', content.length);
-    request.onreadystatechange = function(shellInABox) {
+    /*request.onreadystatechange = function(shellInABox) {
       return function() {
                try {
                  return shellInABox.keyPressReadyStateChange(request);
@@ -239,7 +276,8 @@ ShellInABox.prototype.sendKeys = function(keys) {
                }
              }
       }(this);
-    request.send(content);
+	  */
+	this.websocket.send(content);
   }
 };
 

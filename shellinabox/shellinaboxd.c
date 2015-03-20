@@ -115,9 +115,9 @@ static int            linkifyURLs   = 1;
 static char           *certificateDir;
 static int            certificateFd = -1;
 static HashMap        *externalFiles;
-static Server         *cgiServer;
+//static Server         *cgiServer;
 static char           *cgiSessionKey;
-static int            cgiSessions;
+//static int            cgiSessions;
 static char           *cssStyleSheet;
 static struct UserCSS *userCSSList;
 static const char     *pidfile;
@@ -132,7 +132,7 @@ enum ws_protocols {
 	/* always first */
 	PROTOCOL_HTTP = 0,
 
-	PROTOCOL_KBD,
+	PROTOCOL_SHELL,
 
 	/* always last */
 	WS_PROTOCOL_COUNT
@@ -231,9 +231,10 @@ static int callback_http(struct libwebsocket_context *context,
           !strncasecmp(contentType, "application/x-www-form-urlencoded", 33)) {
         // XMLHttpRequest carrying data between the AJAX application and the
         // client session.
-        return dataHandler(http, arg, buf, len, url);
+		printf("AJAX\n");
+     //   return dataHandler(http, arg, buf, len, url);
       }
-	  */
+*/	  
       UNUSED(rootPageSize);
       char *html            = stringPrintf(NULL, rootPageStart,
                                            enableSSL ? "true" : "false");
@@ -340,61 +341,10 @@ static int callback_http(struct libwebsocket_context *context,
         libwebsockets_return_http_status(context, wsi, 404, NULL);
 		return 1;
       }
-    }
-
-    /* if not, send a file the easy way */
-/*    strcpy(buf, resource_path);
-    if (strcmp(in, "/")) {
-      if (*((const char *)in) != '/')
-        strcat(buf, "/");
-      strncat(buf, in, sizeof(buf) - strlen(resource_path));
-    } else*/ /* default file to serve */
-/*      strcat(buf, "/test.html");
-    buf[sizeof(buf) - 1] = '\0';
-*/
-    /* refuse to serve files we don't understand */
- /*   mimetype = get_mimetype(buf);
-    if (!mimetype) {
-      lwsl_err("Unknown mimetype for %s\n", buf);
-      libwebsockets_return_http_status(context, wsi,
-              HTTP_STATUS_UNSUPPORTED_MEDIA_TYPE, NULL);
-      return -1;
-    }
-*/
-    /* demostrates how to set a cookie on / */
-
- /*   other_headers = NULL;
-    n = 0;
-    if (!strcmp((const char *)in, "/") &&
-         !lws_hdr_total_length(wsi, WSI_TOKEN_HTTP_COOKIE)) {
-*/      /* this isn't very unguessable but it'll do for us */
-  /*    gettimeofday(&tv, NULL);
-      n = sprintf(b64, "test=LWS_%u_%u_COOKIE;Max-Age=360000",
-        (unsigned int)tv.tv_sec,
-        (unsigned int)tv.tv_usec);
-
-      p = (unsigned char *)leaf_path;
-
-      if (lws_add_http_header_by_name(context, wsi, 
-        (unsigned char *)"set-cookie:", 
-        (unsigned char *)b64, n, &p,
-        (unsigned char *)leaf_path + sizeof(leaf_path)))
-        return 1;
-      n = (char *)p - leaf_path;
-      other_headers = leaf_path;
-    }
-*/
- /*   n = libwebsockets_serve_http_file(context, wsi, buf,
-            mimetype, other_headers, n);
-    if (n < 0 || ((n > 0) && lws_http_transaction_completed(wsi)))
-   *///   return -1; /* error or can't reuse connection: close the socket */
-
-    /*
-     * notice that the sending of the file completes asynchronously,
-     * we'll get a LWS_CALLBACK_HTTP_FILE_COMPLETION callback when
-     * it's done
-     */
-
+    } else {
+      libwebsockets_return_http_status(context, wsi, 404, NULL);
+      return 1;
+	}
     break;
 
   case LWS_CALLBACK_HTTP_BODY:
@@ -599,90 +549,171 @@ try_to_reuse:
   return 0;
 }
 
-// Test Protocol
+// Shell Protocol
 
-struct per_session_data__kbd {
-	int number;
+#define MAX_MESSAGE_QUEUE 32
+
+struct per_session_data__shell {
+  struct libwebsocket *wsi;
+  int ringbuffer_tail;
+  struct Service *service;
 };
 
+struct a_message {
+  void *payload;
+  size_t len;
+};
+
+static int dataHandler(struct libwebsocket_context *context, struct libwebsocket *wsi,
+    struct per_session_data__shell *pss,
+    char *data, int size);
+
+static struct a_message ringbuffer[MAX_MESSAGE_QUEUE];
+static int ringbuffer_head;
+
 static int
-callback_kbd(struct libwebsocket_context *context,
-			struct libwebsocket *wsi,
-			enum libwebsocket_callback_reasons reason,
-					       void *user, void *in, size_t len)
+callback_shell(struct libwebsocket_context *context,
+      struct libwebsocket *wsi,
+      enum libwebsocket_callback_reasons reason,
+                 void *user, void *in, size_t len)
 {
-	int n, m;
-	unsigned char buf[LWS_SEND_BUFFER_PRE_PADDING + 512 +
-						  LWS_SEND_BUFFER_POST_PADDING];
-	unsigned char *p = &buf[LWS_SEND_BUFFER_PRE_PADDING];
-	struct per_session_data__kbd *pss = (struct per_session_data__kbd *)user;
+  int n;
+  struct per_session_data__shell *pss = (struct per_session_data__shell *)user;
 
-	switch (reason) {
+  switch (reason) {
 
-	case LWS_CALLBACK_ESTABLISHED:
-		lwsl_info("callback_kbd: "
-						 "LWS_CALLBACK_ESTABLISHED\n");
-		pss->number = 0;
-		break;
+  case LWS_CALLBACK_ESTABLISHED:
+    lwsl_info("callback_shell: LWS_CALLBACK_ESTABLISHED\n");
+    pss->ringbuffer_tail = ringbuffer_head;
+    pss->wsi = wsi;
+    break;
 
-	case LWS_CALLBACK_SERVER_WRITEABLE:
-		n = sprintf((char *)p, "%d", pss->number++);
-		m = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
-		if (m < n) {
-			lwsl_err("ERROR %d writing to di socket\n", n);
-			return -1;
-		}
-		if (pss->number == 50) {
-			lwsl_info("close tesing limit, closing\n");
-			return -1;
-		}
-		break;
+  case LWS_CALLBACK_PROTOCOL_DESTROY:
+    lwsl_notice("mirror protocol cleaning up\n");
+    for (n = 0; n < sizeof ringbuffer / sizeof ringbuffer[0]; n++)
+      if (ringbuffer[n].payload)
+        free(ringbuffer[n].payload);
+    break;
 
-	case LWS_CALLBACK_RECEIVE:
-//		fprintf(stderr, "rx %d\n", (int)len);
-		if (len < 6)
-			break;
-		if (strcmp((const char *)in, "reset\n") == 0)
-			pss->number = 0;
-		break;
-	/*
-	 * this just demonstrates how to use the protocol filter. If you won't
-	 * study and reject connections based on header content, you don't need
-	 * to handle this callback
-	 */
+  case LWS_CALLBACK_SERVER_WRITEABLE:
+    while (pss->ringbuffer_tail != ringbuffer_head) {
 
-	case LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION:
-		//dump_handshake_info(wsi);
-		/* you could return non-zero here and kill the connection */
-		break;
+/*      n = libwebsocket_write(wsi, (unsigned char *)
+           ringbuffer[pss->ringbuffer_tail].payload +
+           LWS_SEND_BUFFER_PRE_PADDING,
+           ringbuffer[pss->ringbuffer_tail].len,
+                LWS_WRITE_TEXT);
+*/
+      int ret = dataHandler(context, wsi, pss,
+        (char *)ringbuffer[pss->ringbuffer_tail].payload + LWS_SEND_BUFFER_PRE_PADDING,
+        ringbuffer[pss->ringbuffer_tail].len);
+      if (ret) {
+        //TODO: Handle error
+      }
 
-	default:
-		break;
-	}
+      if (pss->ringbuffer_tail == (MAX_MESSAGE_QUEUE - 1))
+        pss->ringbuffer_tail = 0;
+      else
+        pss->ringbuffer_tail++;
 
-	return 0;
+      if (((ringbuffer_head - pss->ringbuffer_tail) &
+          (MAX_MESSAGE_QUEUE - 1)) == (MAX_MESSAGE_QUEUE - 15))
+        libwebsocket_rx_flow_allow_all_protocol(
+                 libwebsockets_get_protocol(wsi));
+
+      // lwsl_debug("tx fifo %d\n", (ringbuffer_head - pss->ringbuffer_tail) & (MAX_MESSAGE_QUEUE - 1));
+
+      if (lws_partial_buffered(wsi) || lws_send_pipe_choked(wsi)) {
+        libwebsocket_callback_on_writable(context, wsi);
+        break;
+      }
+      /*
+       * for tests with chrome on same machine as client and
+       * server, this is needed to stop chrome choking
+       */
+#ifdef _WIN32
+      Sleep(1);
+#else
+      usleep(1);
+#endif
+    }
+    break;
+
+  case LWS_CALLBACK_RECEIVE:
+
+    if (((ringbuffer_head - pss->ringbuffer_tail) &
+          (MAX_MESSAGE_QUEUE - 1)) == (MAX_MESSAGE_QUEUE - 1)) {
+      lwsl_err("dropping!\n");
+      goto choke;
+    }
+
+    if (ringbuffer[ringbuffer_head].payload)
+      free(ringbuffer[ringbuffer_head].payload);
+
+    ringbuffer[ringbuffer_head].payload =
+        malloc(LWS_SEND_BUFFER_PRE_PADDING + len +
+              LWS_SEND_BUFFER_POST_PADDING);
+    ringbuffer[ringbuffer_head].len = len;
+    memcpy((char *)ringbuffer[ringbuffer_head].payload +
+            LWS_SEND_BUFFER_PRE_PADDING, in, len);
+    if (ringbuffer_head == (MAX_MESSAGE_QUEUE - 1))
+      ringbuffer_head = 0;
+    else
+      ringbuffer_head++;
+
+    if (((ringbuffer_head - pss->ringbuffer_tail) &
+          (MAX_MESSAGE_QUEUE - 1)) != (MAX_MESSAGE_QUEUE - 2))
+      goto done;
+
+choke:
+    lwsl_debug("LWS_CALLBACK_RECEIVE: throttling %p\n", wsi);
+    libwebsocket_rx_flow_control(wsi, 0);
+
+//    lwsl_debug("rx fifo %d\n", (ringbuffer_head - pss->ringbuffer_tail) & (MAX_MESSAGE_QUEUE - 1));
+done:
+    libwebsocket_callback_on_writable_all_protocol(
+                 libwebsockets_get_protocol(wsi));
+    break;
+
+  /*
+   * this just demonstrates how to use the protocol filter. If you won't
+   * study and reject connections based on header content, you don't need
+   * to handle this callback
+   */
+
+  case LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION:
+//    dump_handshake_info(wsi);
+    /* you could return non-zero here and kill the connection */
+    break;
+
+  default:
+    break;
+  }
+
+  return 0;
 }
 
 static struct libwebsocket_protocols wsProtocols[] = {
-	/* first protocol must always be HTTP handler */
+  /* first protocol must always be HTTP handler */
 
-	{
-		"http-only",		/* name */
-		callback_http,		/* callback */
-		sizeof (struct per_session_data__http),	/* per_session_data_size */
-		0,			/* max frame size / rx buffer */
-	},
-	{
-		"kbd-protocol",
-		callback_kbd,
-		sizeof(struct per_session_data__kbd),
-		10,
-	},
-	{ NULL, NULL, 0, 0 } /* terminator */
+  {
+    "http-only",    /* name */
+    callback_http,    /* callback */
+    sizeof (struct per_session_data__http),  /* per_session_data_size */
+    0,      /* max frame size / rx buffer */
+  },
+  {
+    "shell-protocol",
+    callback_shell,
+    sizeof(struct per_session_data__shell),
+    128,
+  },
+  { NULL, NULL, 0, 0 } /* terminator */
 };
 
 // Tangelo: End
 
+/*
 static char *jsonEscape(const char *buf, int len) {
   static const char *hexDigit = "0123456789ABCDEF";
 
@@ -746,7 +777,9 @@ static char *jsonEscape(const char *buf, int len) {
   *dst++                      = '\000';
   return result;
 }
+*/
 
+/*
 static int printfUnchecked(const char *format, ...) {
   // Some Linux distributions enable -Wformat=2 by default. This is a
   // very unfortunate decision, as that option generates a lot of false
@@ -758,7 +791,8 @@ static int printfUnchecked(const char *format, ...) {
   va_end(ap);
   return rc;
 }
-
+*/
+/*
 static int completePendingRequest(struct Session *session,
                                   const char *buf, int len, int maxLength) {
   // If there is no pending HTTP request, save the data and return
@@ -834,7 +868,9 @@ static int completePendingRequest(struct Session *session,
   }
   return 1;
 }
+*/
 
+/*
 static void sessionDone(void *arg) {
   debug("Child terminated");
   struct Session *session = (struct Session *)arg;
@@ -842,8 +878,9 @@ static void sessionDone(void *arg) {
   addToGraveyard(session);
   completePendingRequest(session, "", 0, INT_MAX);
 }
+*/
 
-static int handleSession(struct ServerConnection *connection, void *arg,
+/*static int handleSession(struct ServerConnection *connection, void *arg,
                          short *events, short revents) {
   struct Session *session       = (struct Session *)arg;
   session->connection           = connection;
@@ -880,7 +917,9 @@ static int handleSession(struct ServerConnection *connection, void *arg,
     return 0;
   }
 }
+*/
 
+/*
 static int invalidatePendingHttpSession(void *arg, const char *key,
                                         char **value) {
   struct Session *session = *(struct Session **)value;
@@ -896,49 +935,62 @@ static int invalidatePendingHttpSession(void *arg, const char *key,
   // If the session is still in use, do not remove it from the "sessions" map
   return 1;
 }
+*/
 
-static int dataHandler(HttpConnection *http, struct Service *service,
-                       const char *buf, int len ATTR_UNUSED, URL *url) {
+char *getPeerName(int fd, int *port, int numericHosts);
+static int dataHandler(struct libwebsocket_context *context, struct libwebsocket *wsi,
+    struct per_session_data__shell *pss,
+    char *data, int size) {
+//  struct Service *service = pss->service;
+  /*
   UNUSED(len);
   if (!buf) {
     // Somebody unexpectedly closed our http connection (e.g. because of a
     // timeout). This is the last notification that we will get.
-    deleteURL(url);
-    iterateOverSessions(invalidatePendingHttpSession, http);
+//    deleteURL(url);
+//    iterateOverSessions(invalidatePendingHttpSession, http);
     return HTTP_DONE;
   }
+  */
 
   // Find an existing session, or create the record for a new one
-  int isNew;
+/*  int isNew;
   struct Session *session = findCGISession(&isNew, http, url, cgiSessionKey);
   if (session == NULL) {
-    httpSendReply(http, 400, "Bad Request", NO_MSG);
-    return HTTP_DONE;
+    libwebsockets_return_http_status(context, wsi, 400, NULL);
+    return 0;
   }
+  */
+  
 
   // Sanity check
+  /*
   if (!isNew && strcmp(session->peerName, httpGetPeerName(http))) {
     error("Peername changed from %s to %s",
           session->peerName, httpGetPeerName(http));
     httpSendReply(http, 400, "Bad Request", NO_MSG);
     return HTTP_DONE;
   }
+  */
 
-  const HashMap *args     = urlGetArgs(session->url);
+/*  const HashMap *args     = urlGetArgs(session->url);
   int oldWidth            = session->width;
   int oldHeight           = session->height;
   const char *width       = getFromHashMap(args, "width");
   const char *height      = getFromHashMap(args, "height");
   const char *keys        = getFromHashMap(args, "keys");
   const char *rootURL     = getFromHashMap(args, "rooturl");
+  */
 
   // Adjust window dimensions if provided by client
-  if (width && height) {
+/*  if (width && height) {
     session->width        = atoi(width);
     session->height       = atoi(height);
   }
+  */
 
   // Create a new session, if the client did not provide an existing one
+  /*
   if (isNew) {
     if (keys) {
     bad_new_session:
@@ -966,15 +1018,19 @@ static int dataHandler(HttpConnection *http, struct Service *service,
                                                 sessionDone, session);
     serverSetTimeout(session->connection, AJAX_TIMEOUT);
   }
+  */
 
   // Reset window dimensions of the pseudo TTY, if changed since last time set.
+  /*
   if (session->width > 0 && session->height > 0 &&
       (session->width != oldWidth || session->height != oldHeight)) {
     debug("Window size changed to %dx%d", session->width, session->height);
     setWindowSize(session->pty, session->width, session->height);
   }
+  */
 
   // Process keypresses, if any. Then send a synchronous reply.
+  /*
   if (keys) {
     char *keyCodes;
     check(keyCodes        = malloc(strlen(keys)/2));
@@ -1010,7 +1066,9 @@ static int dataHandler(HttpConnection *http, struct Service *service,
     }
     session->http         = http;
   }
+  */
 
+/*
   session->connection     = serverGetConnection(session->server,
                                                 session->connection,
                                                 session->pty);
@@ -1034,6 +1092,8 @@ static int dataHandler(HttpConnection *http, struct Service *service,
   }
 
   return HTTP_SUSPEND;
+  */
+  return 0;
 }
 
 static int serveStaticFile(struct libwebsocket_context *context,

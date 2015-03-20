@@ -51,6 +51,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+// Tangelo: Include libwebsockets
+#include <libwebsockets.h>
+
 #include "shellinabox/session.h"
 #include "logging/logging.h"
 
@@ -203,6 +206,9 @@ char *newSessionKey(void) {
   return sessionKey;
 }
 
+static char *getPeerName(int fd, int *port, int numericHosts);
+//struct Session *findCGISession(int *isNew, HttpConnection *http, URL *url,
+//                               const char *cgiSessionKey) {
 struct Session *findCGISession(int *isNew, HttpConnection *http, URL *url,
                                const char *cgiSessionKey) {
   *isNew                 = 1;
