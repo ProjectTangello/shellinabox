@@ -69,18 +69,11 @@
 // #define XHR_RECEIVING   3
 // #define XHR_LOADED      4
 
-// IE does not define XMLHttpRequest by default, so we provide a suitable
-// wrapper.
-/*if (typeof XMLHttpRequest == 'undefined') {
-  XMLHttpRequest = function() {
-    try { return new ActiveXObject('Msxml2.XMLHTTP.6.0');} catch (e) { }
-    try { return new ActiveXObject('Msxml2.XMLHTTP.3.0');} catch (e) { }
-    try { return new ActiveXObject('Msxml2.XMLHTTP');    } catch (e) { }
-    try { return new ActiveXObject('Microsoft.XMLHTTP'); } catch (e) { }
-    throw new Error('');
+if (!Date.now) {
+  Date.now = function now() {
+    return new Date().getTime();
   };
 }
-*/
 
 function extend(subClass, baseClass) {
   function inheritance() { }
@@ -93,28 +86,28 @@ function extend(subClass, baseClass) {
 // From libwebsockets text.html example
 function get_appropriate_ws_url()
 {
-	var pcol;
-	var u = document.URL;
+  var pcol;
+  var u = document.URL;
 
-	/*
-	 * We open the websocket encrypted if this page came on an
-	 * https:// url itself, otherwise unencrypted
-	 */
+  /*
+   * We open the websocket encrypted if this page came on an
+   * https:// url itself, otherwise unencrypted
+   */
 
-	if (u.substring(0, 5) == "https") {
-		pcol = "wss://";
-		u = u.substr(8);
-	} else {
-		pcol = "ws://";
-		if (u.substring(0, 4) == "http")
-			u = u.substr(7);
-	}
+  if (u.substring(0, 5) == "https") {
+    pcol = "wss://";
+    u = u.substr(8);
+  } else {
+    pcol = "ws://";
+    if (u.substring(0, 4) == "http")
+      u = u.substr(7);
+  }
 
-	u = u.split('/');
+  u = u.split('/');
 
-	/* + "/xxx" bit is for IE10 workaround */
+  /* + "/xxx" bit is for IE10 workaround */
 
-	return pcol + u[0] + "/xxx";
+  return pcol + u[0] + "/xxx";
 }
 function wsOnOpen(evt) {
   this.shell.sendRequest();
@@ -135,7 +128,6 @@ function wsOnError(evt) {
   shell.sessionClosed();
 }
 
-
 function ShellInABox(url, container) {
   if (url == undefined) {
     this.rooturl    = document.location.href;
@@ -152,7 +144,7 @@ function ShellInABox(url, container) {
   } else {
     this.nextUrl    = this.url;
 //    this.session    = null;
-	this.websocket = null;
+  this.websocket = null;
   }
   this.pendingKeys  = '';
   this.keysInFlight = false;
@@ -175,13 +167,13 @@ extend(ShellInABox, VT100);
 ShellInABox.prototype.sessionClosed = function() {
   try {
     this.connected    = false;
-    if (this.session) {
-      this.session    = undefined;
+//    if (this.session) {
+//      this.session    = undefined;
       if (this.cursorX > 0) {
         this.vt100('\r\n');
       }
       this.vt100('Session closed.');
-    }
+//    }
     this.showReconnect(true);
   } catch (e) {
   }
@@ -218,7 +210,7 @@ ShellInABox.prototype.reconnect = function() {
 //      if (this.url != this.nextUrl) {
 //        document.location.replace(this.nextUrl);
 //      } else {
-	this.connect();
+  this.connect();
         this.pendingKeys     = '';
         this.keysInFlight    = false;
         this.reset(true);
@@ -247,31 +239,6 @@ ShellInABox.prototype.sendRequest = function(request) {
   this.websocket.send(content);
 };
 
-ShellInABox.prototype.onReadyStateChange = function(request) {
-  if (request.readyState == 4 /* XHR_LOADED */) {
-    if (request.status == 200) {
-      this.connected = true;
-      var response   = eval('(' + request.responseText + ')');
-      if (response.data) {
-        this.vt100(response.data);
-      }
-
-      if (!response.session ||
-          this.session && this.session != response.session) {
-        this.sessionClosed();
-      } else {
-        this.session = response.session;
-        this.sendRequest(request);
-      }
-    } else if (request.status == 0) {
-      // Time Out
-      this.sendRequest(request);
-    } else {
-      this.sessionClosed();
-    }
-  }
-};
-
 ShellInABox.prototype.sendKeys = function(keys) {
   //if (!this.connected) {
   if (!this.websocket || this.websocket.readyState != WebSocket.OPEN) {
@@ -284,14 +251,14 @@ ShellInABox.prototype.sendKeys = function(keys) {
 //    this.keysInFlight          = true;
     keys                       = this.pendingKeys + keys;
     this.pendingKeys           = '';
-	console.log("pending: " + keys);
+  console.log("pending: " + keys);
    // var request                = new XMLHttpRequest();
    /*
     var content                = 'width=' + this.terminalWidth +
                                  '&height=' + this.terminalHeight +
                                  '&session=' +encodeURIComponent(this.session)+
                                  '&keys=' + encodeURIComponent(keys);
-								 */
+                 */
     /*request.onreadystatechange = function(shellInABox) {
       return function() {
                try {
@@ -300,17 +267,8 @@ ShellInABox.prototype.sendKeys = function(keys) {
                }
              }
       }(this);
-	  */
-	this.websocket.send('K ' + keys);
-  }
-};
-
-ShellInABox.prototype.keyPressReadyStateChange = function(request) {
-  if (request.readyState == 4 /* XHR_LOADED */) {
-    this.keysInFlight = false;
-    if (this.pendingKeys) {
-      this.sendKeys('');
-    }
+    */
+  this.websocket.send('K ' + keys);
   }
 };
 
@@ -349,10 +307,9 @@ ShellInABox.prototype.keysPressed = function(ch) {
 
 ShellInABox.prototype.resized = function(w, h) {
   // Do not send a resize request until we are fully initialized.
-//  if (this.session) {
   if (this.websocket && this.websocket.readyState == WebSocket.OPEN) {
  // console.log("Resize: " + this.terminalWidth + " " + this.terminalHeight);
-	this.websocket.send('S ' + this.terminalWidth + ' ' + this.terminalHeight);
+    this.websocket.send('S ' + this.terminalWidth + ' ' + this.terminalHeight);
   }
 };
 

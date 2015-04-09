@@ -128,34 +128,34 @@ static char *jsonEscape(const char *buf, int len);
 static struct libwebsocket_context *wsContext;
 
 enum ws_protocols {
-	/* always first */
-	PROTOCOL_HTTP = 0,
+  /* always first */
+  PROTOCOL_HTTP = 0,
 
-	PROTOCOL_SHELL,
+  PROTOCOL_SHELL,
 
-	/* always last */
-	WS_PROTOCOL_COUNT
+  /* always last */
+  WS_PROTOCOL_COUNT
 };
 
 // HTTP Protocol
 
 const char * get_mimetype(const char *file)
 {
-	int n = strlen(file);
+  int n = strlen(file);
 
-	if (n < 5)
-		return NULL;
+  if (n < 5)
+    return NULL;
 
-	if (!strcmp(&file[n - 4], ".ico"))
-		return "image/x-icon";
+  if (!strcmp(&file[n - 4], ".ico"))
+    return "image/x-icon";
 
-	if (!strcmp(&file[n - 4], ".png"))
-		return "image/png";
+  if (!strcmp(&file[n - 4], ".png"))
+    return "image/png";
 
-	if (!strcmp(&file[n - 5], ".html"))
-		return "text/html";
+  if (!strcmp(&file[n - 5], ".html"))
+    return "text/html";
 
-	return NULL;
+  return NULL;
 }
 
 //#define LOCAL_RESOURCE_PATH "/root/dev/shellinabox/shellinabox"
@@ -163,12 +163,12 @@ const char * get_mimetype(const char *file)
 char *resource_path = LOCAL_RESOURCE_PATH;
 
 struct per_session_data__http {
-	int useStatic;
-	int freeAfter;
-	char *stcStart;
-	char *stcMark;
-	size_t stcSize;
-	int fd;
+  int useStatic;
+  int freeAfter;
+  char *stcStart;
+  char *stcMark;
+  size_t stcSize;
+  int fd;
 };
 
 static int serveStaticFile(struct libwebsocket_context *context,
@@ -220,129 +220,121 @@ static int callback_http(struct libwebsocket_context *context,
 
     // Tangelo: Attempt to serve files from memory
     const char *pathInfo = (const char *)in + 1;
-//	printf("GET: %s\n", pathInfo);
+//  printf("GET: %s\n", pathInfo);
     int pathInfoLength = strlen (pathInfo);
     if (!pathInfoLength ||
         (pathInfoLength == 5 && !memcmp(pathInfo, "plain", 5)) ||
         (pathInfoLength == 6 && !memcmp(pathInfo, "secure", 6))) {
-      // The root page serves the AJAX application.
-/*      if (contentType &&
-          !strncasecmp(contentType, "application/x-www-form-urlencoded", 33)) {
-        // XMLHttpRequest carrying data between the AJAX application and the
-        // client session.
-     //   return dataHandler(http, arg, buf, len, url);
-      }
-*/	  
       UNUSED(rootPageSize);
       char *html            = stringPrintf(NULL, rootPageStart,
                                            enableSSL ? "true" : "false");
-	  pss->freeAfter = 1;
-	  int ret = serveStaticFile(context, wsi, pss,
-	    (unsigned char *)buffer, sizeof(buffer),
-	    "text/html", html, strrchr(html, '\000'));
-	  if (ret)
-         return ret;
-    } else if (pathInfoLength == 8 && !memcmp(pathInfo, "beep.wav", 8)) {
-      // Serve the audio sample for the console bell.
-	  int ret = serveStaticFile(context, wsi, pss,
-	    (unsigned char *)buffer, sizeof(buffer),
-	    "audio/x-wav", beepStart, beepStart + beepSize - 1);
-	  if (ret)
-         return ret;
-    } else if (pathInfoLength == 11 && !memcmp(pathInfo, "enabled.gif", 11)) {
-      // Serve the checkmark icon used in the context menu
-	  int ret = serveStaticFile(context, wsi, pss,
-	    (unsigned char *)buffer, sizeof(buffer),
-	    "image/gif", enabledStart, enabledStart + enabledSize - 1);
-	  if (ret)
-         return ret;
-    } else if (pathInfoLength == 11 && !memcmp(pathInfo, "favicon.ico", 11)) {
-      // Serve the favicon
-	  int ret = serveStaticFile(context, wsi, pss,
-	    (unsigned char *)buffer, sizeof(buffer),
-	    "image/x-icon", faviconStart, faviconStart + faviconSize - 1);
-	  if (ret)
-         return ret;
-    } else if (pathInfoLength == 13 && !memcmp(pathInfo, "keyboard.html", 13)) {
-      // Serve the keyboard layout
-	  int ret = serveStaticFile(context, wsi, pss,
-	    (unsigned char *)buffer, sizeof(buffer),
-	    "text/html", keyboardLayoutStart, keyboardLayoutStart + keyboardLayoutSize - 1);
-	  if (ret)
-         return ret;
-    } else if (pathInfoLength == 12 && !memcmp(pathInfo, "keyboard.png", 12)) {
-      // Serve the keyboard icon
-	  int ret = serveStaticFile(context, wsi, pss,
-	    (unsigned char *)buffer, sizeof(buffer),
-	    "image/png", keyboardStart, keyboardStart + keyboardSize - 1);
-	  if (ret)
-         return ret;
-    } else if (pathInfoLength == 14 && !memcmp(pathInfo, "ShellInABox.js", 14)) {
-      // Serve both vt100.js and shell_in_a_box.js in the same transaction.
-      // Also, indicate to the client whether the server is SSL enabled.
-      char *userCSSString   = getUserCSSString(userCSSList);
-      char *stateVars       = stringPrintf(NULL,
-                                           "serverSupportsSSL = %s;\n"
-                                           "disableSSLMenu    = %s;\n"
-                                           "suppressAllAudio  = %s;\n"
-                                           "linkifyURLs       = %d;\n"
-                                           "userCSSList       = %s;\n\n",
-                                           enableSSL      ? "true" : "false",
-                                           !enableSSLMenu ? "true" : "false",
-                                           noBeep         ? "true" : "false",
-                                           linkifyURLs, userCSSString);
-      free(userCSSString);
-      int stateVarsLength   = strlen(stateVars);
-      int contentLength     = stateVarsLength +
-                              vt100Size - 1 +
-                              shellInABoxSize - 1;
-      char *response        = malloc(contentLength + 1);
-	  memset(response, 0, contentLength + 1);
-      memcpy(memcpy(memcpy(
-        response, stateVars, stateVarsLength)+stateVarsLength,
-        vt100Start, vt100Size - 1) + vt100Size - 1,
-        shellInABoxStart, shellInABoxSize - 1);
-      free(stateVars);
-	  pss->freeAfter = 1;
-	  int ret = serveStaticFile(context, wsi, pss,
-	    (unsigned char *)buffer, sizeof(buffer),
-	    "text/javascript; charset=utf-8", response, response + contentLength - 1);
-	  if (ret)
-         return ret;
-    } else if (pathInfoLength == 10 && !memcmp(pathInfo, "styles.css", 10)) {
-      // Serve the style sheet.
-	  int ret = serveStaticFile(context, wsi, pss,
-	    (unsigned char *)buffer, sizeof(buffer),
-	    "text/css; charset=utf-8", cssStyleSheet, strrchr(cssStyleSheet, '\000'));
-	  if (ret)
-         return ret;
-    } else if (pathInfoLength == 16 && !memcmp(pathInfo, "print-styles.css",16)){
-      // Serve the style sheet.
-	  int ret = serveStaticFile(context, wsi, pss,
-	    (unsigned char *)buffer, sizeof(buffer),
-	    "text/css; charset=utf-8", printStylesStart, printStylesStart + printStylesSize - 1);
-	  if (ret)
-         return ret;
-    } else if (pathInfoLength > 8 && !memcmp(pathInfo, "usercss-", 8)) {
-      // Server user style sheets (if any)
-      struct UserCSS *css   = userCSSList;
-      for (int idx          = atoi(pathInfo + 8);
-           idx-- > 0 && css; css = css->next ) {
-      }
-      if (css) {
-	    int ret = serveStaticFile(context, wsi, pss,
-	      (unsigned char *)buffer, sizeof(buffer),
-	      "text/css; charset=utf-8", css->style, css->style + css->styleLen);
-	    if (ret)
-          return ret;
+      pss->freeAfter = 1;
+      int ret = serveStaticFile(context, wsi, pss,
+        (unsigned char *)buffer, sizeof(buffer),
+        "text/html", html, strrchr(html, '\000'));
+      if (ret)
+           return ret;
+      } else if (pathInfoLength == 8 && !memcmp(pathInfo, "beep.wav", 8)) {
+        // Serve the audio sample for the console bell.
+      int ret = serveStaticFile(context, wsi, pss,
+        (unsigned char *)buffer, sizeof(buffer),
+        "audio/x-wav", beepStart, beepStart + beepSize - 1);
+      if (ret)
+           return ret;
+      } else if (pathInfoLength == 11 && !memcmp(pathInfo, "enabled.gif", 11)) {
+        // Serve the checkmark icon used in the context menu
+      int ret = serveStaticFile(context, wsi, pss,
+        (unsigned char *)buffer, sizeof(buffer),
+        "image/gif", enabledStart, enabledStart + enabledSize - 1);
+      if (ret)
+           return ret;
+      } else if (pathInfoLength == 11 && !memcmp(pathInfo, "favicon.ico", 11)) {
+        // Serve the favicon
+      int ret = serveStaticFile(context, wsi, pss,
+        (unsigned char *)buffer, sizeof(buffer),
+        "image/x-icon", faviconStart, faviconStart + faviconSize - 1);
+      if (ret)
+           return ret;
+      } else if (pathInfoLength == 13 && !memcmp(pathInfo, "keyboard.html", 13)) {
+        // Serve the keyboard layout
+      int ret = serveStaticFile(context, wsi, pss,
+        (unsigned char *)buffer, sizeof(buffer),
+        "text/html", keyboardLayoutStart, keyboardLayoutStart + keyboardLayoutSize - 1);
+      if (ret)
+           return ret;
+      } else if (pathInfoLength == 12 && !memcmp(pathInfo, "keyboard.png", 12)) {
+        // Serve the keyboard icon
+      int ret = serveStaticFile(context, wsi, pss,
+        (unsigned char *)buffer, sizeof(buffer),
+        "image/png", keyboardStart, keyboardStart + keyboardSize - 1);
+      if (ret)
+           return ret;
+      } else if (pathInfoLength == 14 && !memcmp(pathInfo, "ShellInABox.js", 14)) {
+        // Serve both vt100.js and shell_in_a_box.js in the same transaction.
+        // Also, indicate to the client whether the server is SSL enabled.
+        char *userCSSString   = getUserCSSString(userCSSList);
+        char *stateVars       = stringPrintf(NULL,
+                                             "serverSupportsSSL = %s;\n"
+                                             "disableSSLMenu    = %s;\n"
+                                             "suppressAllAudio  = %s;\n"
+                                             "linkifyURLs       = %d;\n"
+                                             "userCSSList       = %s;\n\n",
+                                             enableSSL      ? "true" : "false",
+                                             !enableSSLMenu ? "true" : "false",
+                                             noBeep         ? "true" : "false",
+                                             linkifyURLs, userCSSString);
+        free(userCSSString);
+        int stateVarsLength   = strlen(stateVars);
+        int contentLength     = stateVarsLength +
+                                vt100Size - 1 +
+                                shellInABoxSize - 1;
+        char *response        = malloc(contentLength + 1);
+        memset(response, 0, contentLength + 1);
+        memcpy(memcpy(memcpy(
+          response, stateVars, stateVarsLength)+stateVarsLength,
+          vt100Start, vt100Size - 1) + vt100Size - 1,
+          shellInABoxStart, shellInABoxSize - 1);
+        free(stateVars);
+        pss->freeAfter = 1;
+        int ret = serveStaticFile(context, wsi, pss,
+          (unsigned char *)buffer, sizeof(buffer),
+          "text/javascript; charset=utf-8", response, response + contentLength - 1);
+        if (ret)
+             return ret;
+      } else if (pathInfoLength == 10 && !memcmp(pathInfo, "styles.css", 10)) {
+        // Serve the style sheet.
+      int ret = serveStaticFile(context, wsi, pss,
+        (unsigned char *)buffer, sizeof(buffer),
+        "text/css; charset=utf-8", cssStyleSheet, strrchr(cssStyleSheet, '\000'));
+      if (ret)
+           return ret;
+      } else if (pathInfoLength == 16 && !memcmp(pathInfo, "print-styles.css",16)){
+        // Serve the style sheet.
+      int ret = serveStaticFile(context, wsi, pss,
+        (unsigned char *)buffer, sizeof(buffer),
+        "text/css; charset=utf-8", printStylesStart, printStylesStart + printStylesSize - 1);
+      if (ret)
+           return ret;
+      } else if (pathInfoLength > 8 && !memcmp(pathInfo, "usercss-", 8)) {
+        // Server user style sheets (if any)
+        struct UserCSS *css   = userCSSList;
+        for (int idx          = atoi(pathInfo + 8);
+             idx-- > 0 && css; css = css->next ) {
+        }
+        if (css) {
+        int ret = serveStaticFile(context, wsi, pss,
+          (unsigned char *)buffer, sizeof(buffer),
+          "text/css; charset=utf-8", css->style, css->style + css->styleLen);
+        if (ret)
+            return ret;
+        } else {
+          libwebsockets_return_http_status(context, wsi, 404, NULL);
+      return 1;
+        }
       } else {
         libwebsockets_return_http_status(context, wsi, 404, NULL);
-		return 1;
-      }
-    } else {
-      libwebsockets_return_http_status(context, wsi, 404, NULL);
-      return 1;
-	}
+        return 1;
+    }
     break;
 
   case LWS_CALLBACK_HTTP_BODY:
@@ -390,12 +382,12 @@ static int callback_http(struct libwebsocket_context *context,
           n = m;
         
         //n = read(pss->fd, buffer + LWS_SEND_BUFFER_PRE_PADDING, n);
-		if (pss->stcSize < n)
-          n = pss->stcSize;
-		memcpy(buffer + LWS_SEND_BUFFER_PRE_PADDING, pss->stcMark, n);
-		pss->stcMark += n;
-		pss->stcSize -= n;
-		
+        if (pss->stcSize < n)
+              n = pss->stcSize;
+        memcpy(buffer + LWS_SEND_BUFFER_PRE_PADDING, pss->stcMark, n);
+        pss->stcMark += n;
+        pss->stcSize -= n;
+    
         /* problem reading, close conn */
         if (n < 0)
           goto bail;
@@ -484,7 +476,7 @@ static int callback_http(struct libwebsocket_context *context,
           break;
   
       } while (!lws_send_pipe_choked(wsi));
-	}
+  }
 
 later:
     libwebsocket_callback_on_writable(context, wsi);
@@ -496,17 +488,17 @@ flush_bail:
       break;
     }
     if (pss->useStatic == 1) {
-	  if (pss->freeAfter == 1)
-	    free(pss->stcStart);
-	} else
+    if (pss->freeAfter == 1)
+      free(pss->stcStart);
+  } else
       close(pss->fd);
     goto try_to_reuse;
 
 bail:
     if (pss->useStatic == 1) {
-	  if (pss->freeAfter == 1)
-	    free(pss->stcStart);
-	} else
+    if (pss->freeAfter == 1)
+      free(pss->stcStart);
+  } else
       close(pss->fd);
     return -1;
 
@@ -590,23 +582,21 @@ callback_shell(struct libwebsocket_context *context,
     pss->ringbuffer_tail = ringbuffer_head;
     pss->wsi = wsi;
 
-	//- Initialize Session -
+  //- Initialize Session -
     pss->pty            = -1;
     pss->width          = 0;
     pss->height         = 0;
     pss->buffered       = NULL;
     pss->len            = 0;
-	printf("%lx: Connected\n", (unsigned long)pss);
+  printf("%lx: Connected\n", (unsigned long)pss);
 
     break;
 
   case LWS_CALLBACK_CLOSED:
-    if (pss->pty >= 0) {
+    if (pss->pty >= 0)
       NOINTR(close(pss->pty));
-    }
-	printf("%lx: Disconnected\n", (unsigned long)pss);
-
-  	break;
+  printf("%lx: Disconnected\n", (unsigned long)pss);
+    break;
 
   case LWS_CALLBACK_PROTOCOL_DESTROY:
     lwsl_notice("mirror protocol cleaning up\n");
@@ -618,12 +608,6 @@ callback_shell(struct libwebsocket_context *context,
   case LWS_CALLBACK_SERVER_WRITEABLE:
     while (pss->ringbuffer_tail != ringbuffer_head) {
 
-/*      n = libwebsocket_write(wsi, (unsigned char *)
-           ringbuffer[pss->ringbuffer_tail].payload +
-           LWS_SEND_BUFFER_PRE_PADDING,
-           ringbuffer[pss->ringbuffer_tail].len,
-                LWS_WRITE_TEXT);
-*/
       int ret = dataHandler(context, wsi, pss,
         (char *)ringbuffer[pss->ringbuffer_tail].payload + LWS_SEND_BUFFER_PRE_PADDING,
         ringbuffer[pss->ringbuffer_tail].len);
@@ -658,34 +642,33 @@ callback_shell(struct libwebsocket_context *context,
 #endif
     }
 
-	// Read socket
-	if (pss->pty != -1 ) {
-	  char buf[MAX_RESPONSE];
-	  int bytes                     = 0;
-	    bytes                       = NOINTR(read(pss->pty, buf, MAX_RESPONSE));
-	    if (bytes > 0) {
-			char *rData = jsonEscape(buf, bytes);
-			//TODO: Use constants to generate padding
-          char *rJson        = stringPrintf(NULL, "%18s{"
+    // Read socket
+    if (pss->pty != -1 ) {
+      char buf[MAX_RESPONSE];
+      int bytes                     = 0;
+      bytes                       = NOINTR(read(pss->pty, buf, MAX_RESPONSE));
+      if (bytes > 0) {
+        char *rData = jsonEscape(buf, bytes);
+        //TODO: Use constants to generate padding
+        char *rJson        = stringPrintf(NULL, "%18s{"
         //                                       "\"session\":\"%s\","
                                                "\"data\":\"%s\""
                                                "}%4s",
                                                "", rData, "");
-//		  printf("PAD: %d %d\n", LWS_SEND_BUFFER_PRE_PADDING, LWS_SEND_BUFFER_POST_PADDING);
-	//		 printf("Json: %s\n", rJson);
-			 libwebsocket_write(wsi, (unsigned char *)(rJson + LWS_SEND_BUFFER_PRE_PADDING), strlen(rJson) - LWS_SEND_BUFFER_PRE_PADDING - LWS_SEND_BUFFER_POST_PADDING, LWS_WRITE_TEXT);
-			 free(rData);
-			 free(rJson);
-	    } else if(errno == EIO){
-			return -1;
-		}
-	}
+//      printf("PAD: %d %d\n", LWS_SEND_BUFFER_PRE_PADDING, LWS_SEND_BUFFER_POST_PADDING);
+//      printf("Json: %s\n", rJson);
+        libwebsocket_write(wsi, (unsigned char *)(rJson + LWS_SEND_BUFFER_PRE_PADDING), strlen(rJson) - LWS_SEND_BUFFER_PRE_PADDING - LWS_SEND_BUFFER_POST_PADDING, LWS_WRITE_TEXT);
+        free(rData);
+        free(rJson);
+      } else if(errno == EIO)
+        return -1;
+    }
     libwebsocket_callback_on_writable(context, wsi);
 
 #ifdef _WIN32
-      Sleep(1);
+    Sleep(1);
 #else
-      usleep(1);
+    usleep(1);
 #endif
 
     break;
@@ -1022,89 +1005,85 @@ static int dataHandler(struct libwebsocket_context *context, struct libwebsocket
   }
   */
   if (size) {
-	  if (data[0] == 'S') {
-		  int i = 2;
-		  int w = atoi(&data[i]);
-		  while (data[i++] != ' ') { }
-		  int h = atoi(&data[i]);
+    if (data[0] == 'S') {
+      int i = 2;
+      int w = atoi(&data[i]);
+      while (data[i++] != ' ') { }
+      int h = atoi(&data[i]);
 
-  int oldWidth            = pss->width;
-  int oldHeight           = pss->height;
-		  pss->width = w;
-		  pss->height = h;
+      int oldWidth            = pss->width;
+      int oldHeight           = pss->height;
+      pss->width = w;
+      pss->height = h;
 
-		  if (pss->pty == -1) {
-			  /*
-    if (keys) {
-    bad_new_session:
-      abandonSession(session);
-      httpSendReply(http, 400, "Bad Request", NO_MSG);
-      return HTTP_DONE;
-    }
-	*/
-			  const char *peerName = "test";
-			  const char *url = "/";
-		//    if (launchChild(service->id, session,
-		//                    rootURL && *rootURL ? rootURL : urlGetURL(url)) < 0) {
-		    if (launchChild(service->id, w, h, peerName, strlen(peerName),
-					&pss->pty, url) < 0) {
-		  //    abandonSession(session);
-//		      httpSendReply(http, 500, "Internal Error", NO_MSG);
-//		      return HTTP_DONE;
-	//			printf("Error Launching Child\n");
-		    } else {
-	//			printf("Launched Child\n");
-			}
-		  } else {
-  // Reset window dimensions of the pseudo TTY, if changed since last time set.
-  if (pss->width > 0 && pss->height > 0 &&
-      (pss->width != oldWidth || pss->height != oldHeight)) {
-//    printf("Window size changed to %dx%d\n", pss->width, pss->height);
-    setWindowSize(pss->pty, pss->width, pss->height);
-  }
-		  }
-	  } else if (data[0] == 'K' && pss->pty != -1) {
-  // Process keypresses, if any. Then send a synchronous reply.
-  const char *keys        = &data[2];
-  if (keys) {
-    char *keyCodes;
-    check(keyCodes        = malloc(strlen(keys)/2));
-    int len               = 0;
-    for (const unsigned char *ptr = (const unsigned char *)keys; ;) {
-      unsigned c0         = *ptr++;
-      if (c0 < '0' || (c0 > '9' && c0 < 'A') ||
-          (c0 > 'F' && c0 < 'a') || c0 > 'f') {
-        break;
+      if (pss->pty == -1) {
+/*
+      if (keys) {
+      bad_new_session:
+        abandonSession(session);
+        httpSendReply(http, 400, "Bad Request", NO_MSG);
+        return HTTP_DONE;
       }
-      unsigned c1         = *ptr++;
-      if (c1 < '0' || (c1 > '9' && c1 < 'A') ||
-          (c1 > 'F' && c1 < 'a') || c1 > 'f') {
-        break;
+*/
+        const char *peerName = "test";
+        const char *url = "/";
+        if (launchChild(service->id, w, h, (char *)peerName, strlen(peerName),
+          &pss->pty, url) < 0) {
+//        abandonSession(session);
+//        httpSendReply(http, 500, "Internal Error", NO_MSG);
+//        return HTTP_DONE;
+//        printf("Error Launching Child\n");
+        }
+      } else {
+        // Reset window dimensions of the pseudo TTY, if changed since last time set.
+        if (pss->width > 0 && pss->height > 0 &&
+            (pss->width != oldWidth || pss->height != oldHeight)) {
+      //    printf("Window size changed to %dx%d\n", pss->width, pss->height);
+          setWindowSize(pss->pty, pss->width, pss->height);
+        }
       }
-      keyCodes[len++]     = 16*((c0 & 0xF) + 9*(c0 > '9')) +
-                                (c1 & 0xF) + 9*(c1 > '9');
+    } else if (data[0] == 'K' && pss->pty != -1) {
+      // Process keypresses, if any. Then send a synchronous reply.
+      const unsigned char *keys = (unsigned char *)&data[2];
+	  const unsigned char *end = keys + size - 2;
+      if (keys) {
+        char *keyCodes;
+        check(keyCodes = malloc(size / 2 - 1));
+        int len = 0;
+        for (const unsigned char *ptr = keys; ptr != end;) {
+          unsigned c0 = *ptr++;
+          if (c0 < '0' || (c0 > '9' && c0 < 'A') ||
+              (c0 > 'F' && c0 < 'a') || c0 > 'f') {
+            break;
+          }
+          unsigned c1 = *ptr++;
+          if (c1 < '0' || (c1 > '9' && c1 < 'A') ||
+              (c1 > 'F' && c1 < 'a') || c1 > 'f') {
+            break;
+          }
+          keyCodes[len++] = 16*((c0 & 0xF) + 9*(c0 > '9')) +
+                              (c1 & 0xF) + 9*(c1 > '9');
+        }
+        if (write(pss->pty, keyCodes, len) < 0 && errno == EAGAIN) {
+    //      completePendingRequest(session, "\007", 1, MAX_RESPONSE);
+        }
+        free(keyCodes);
+     //   httpSendReply(http, 200, "OK", " ");
+    //    check(session->http != http);
+     //   return HTTP_DONE;
+      } else {
+        // This request is polling for data. Finish any pending requests and
+        // queue (or process) a new one.
+      /*
+        if (session->http && session->http != http &&
+            !completePendingRequest(session, "", 0, MAX_RESPONSE)) {
+          httpSendReply(http, 400, "Bad Request", NO_MSG);
+          return HTTP_DONE;
+        }
+        session->http         = http;
+      */
+      }
     }
-    if (write(pss->pty, keyCodes, len) < 0 && errno == EAGAIN) {
-//      completePendingRequest(session, "\007", 1, MAX_RESPONSE);
-    }
-    free(keyCodes);
- //   httpSendReply(http, 200, "OK", " ");
-//    check(session->http != http);
- //   return HTTP_DONE;
-  } else {
-    // This request is polling for data. Finish any pending requests and
-    // queue (or process) a new one.
-	/*
-    if (session->http && session->http != http &&
-        !completePendingRequest(session, "", 0, MAX_RESPONSE)) {
-      httpSendReply(http, 400, "Bad Request", NO_MSG);
-      return HTTP_DONE;
-    }
-    session->http         = http;
-	*/
-  }
-
-	  }
   }
 
 /*  const HashMap *args     = urlGetArgs(session->url);
@@ -1358,7 +1337,7 @@ static int serveStaticFile(struct libwebsocket_context *context,
       free(pss->stcStart);
     return -1;
   }
-	  
+    
   /*
    * book us a LWS_CALLBACK_HTTP_WRITEABLE callback
    */
@@ -1859,7 +1838,8 @@ int main(int argc, char * const argv[]) {
 
   // Fork the launcher process, allowing us to drop privileges in the main
   // process.
-  int launcherFd  = forkLauncher();
+  forkLauncher();
+//  int launcherFd  = forkLauncher();
 
   // Make sure that our timestamps will print in the standard format
   setlocale(LC_TIME, "POSIX");
