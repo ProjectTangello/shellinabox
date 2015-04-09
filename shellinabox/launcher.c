@@ -499,7 +499,8 @@ static int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf, size_t buflen,
 }
 #endif
 
-int launchChild(int service, struct Session *session, const char *url) {
+//int launchChild(int service, struct Session *session, const char *url) {
+int launchChild(int service, int width, int height, char *peerName, int peerNameSize, int *ptyPtr, const char *url) {
   if (launcher < 0) {
     errno              = EINVAL;
     return -1;
@@ -520,14 +521,19 @@ int launchChild(int service, struct Session *session, const char *url) {
   ssize_t len          = sizeof(struct LaunchRequest) + strlen(u) + 1;
   check(request        = calloc(len, 1));
   request->service     = service;
-  request->width       = session->width;
-  request->height      = session->height;
-  strncat(request->peerName, httpGetPeerName(session->http),
-          sizeof(request->peerName) - 1);
+//  request->width       = session->width;
+//  request->height      = session->height;
+  request->width       = width;
+  request->height      = height;
+//  strncat(request->peerName, httpGetPeerName(session->http),
+//          sizeof(request->peerName) - 1);
+  strncat(request->peerName, peerName,
+          peerNameSize);
   request->urlLength   = strlen(u);
   memcpy(&request->url, u, request->urlLength);
   free(u);
   if (NOINTR(write(launcher, request, len)) != len) {
+	  printf("FAILEEDWRITE\n");
     free(request);
     return -1;
   }
@@ -544,6 +550,7 @@ int launchChild(int service, struct Session *session, const char *url) {
   msg.msg_controllen   = sizeof(cmsg_buf);
   int bytes            = NOINTR(recvmsg(launcher, &msg, 0));
   if (bytes < 0) {
+	  printf("NOBYTES\n");
     return -1;
   }
   check(bytes == sizeof(pid));
@@ -551,7 +558,8 @@ int launchChild(int service, struct Session *session, const char *url) {
   check(cmsg);
   check(cmsg->cmsg_level == SOL_SOCKET);
   check(cmsg->cmsg_type  == SCM_RIGHTS);
-  memcpy(&session->pty, CMSG_DATA(cmsg), sizeof(int));
+  //memcpy(&session->pty, CMSG_DATA(cmsg), sizeof(int));
+  memcpy(ptyPtr, CMSG_DATA(cmsg), sizeof(int));
   return pid;
 }
 

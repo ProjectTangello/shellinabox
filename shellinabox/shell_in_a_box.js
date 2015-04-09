@@ -120,13 +120,19 @@ function wsOnOpen(evt) {
   this.shell.sendRequest();
 }
 function wsOnClose(evt) {
-  console.log("wsOnClose: " + evt.data);
+  shell.sessionClosed();
 }
 function wsOnMessage(evt) {
-  console.log("wsOnMessage: " + evt.data);
+  var response   = eval('(' + evt.data + ')');
+  if (response.data) {
+    shell.vt100(response.data);
+  }
+//  console.log("wsOnMessage: " + evt.data);
 }
 function wsOnError(evt) {
   console.log("wsOnError: " + evt.data);
+  shell.websocket = null;
+  shell.sessionClosed();
 }
 
 
@@ -142,32 +148,18 @@ function ShellInABox(url, container) {
     var hash        = decodeURIComponent(document.location.hash).
                       replace(/^#/, '');
     this.nextUrl    = hash.replace(/,.*/, '');
-    this.session    = hash.replace(/[^,]*,/, '');
+ //   this.session    = hash.replace(/[^,]*,/, '');
   } else {
     this.nextUrl    = this.url;
-    this.session    = null;
+//    this.session    = null;
+	this.websocket = null;
   }
   this.pendingKeys  = '';
   this.keysInFlight = false;
   this.connected    = false;
   this.superClass.constructor.call(this, container);
 
-  var wsUrl = get_appropriate_ws_url();
-
-  if (typeof MozWebSocket != "undefined") {
-    this.websocket = new MozWebSocket(wsUrl,
-      "shell-protocol");
-  } else {
-    this.websocket = new WebSocket(wsUrl,
-      "shell-protocol");
-  }
-
-  this.websocket.shell = this;
-  this.websocket.url = wsUrl;
-  this.websocket.onopen = wsOnOpen;
-  this.websocket.onclose = wsOnClose;
-  this.websocket.onmessage = wsOnMessage;
-  this.websocket.onerror = wsOnError;
+  this.connect();
 
   // We have to initiate the first XMLHttpRequest from a timer. Otherwise,
   // Chrome never realizes that the page has loaded.
@@ -195,36 +187,63 @@ ShellInABox.prototype.sessionClosed = function() {
   }
 };
 
+ShellInABox.prototype.connect = function() {
+  var wsUrl = get_appropriate_ws_url();
+
+  if (typeof MozWebSocket != "undefined") {
+    this.websocket = new MozWebSocket(wsUrl,
+      "shell-protocol");
+  } else {
+    this.websocket = new WebSocket(wsUrl,
+      "shell-protocol");
+  }
+
+  this.websocket.shell = this;
+  this.websocket.url = wsUrl;
+  this.websocket.onopen = wsOnOpen;
+  this.websocket.onclose = wsOnClose;
+  this.websocket.onmessage = wsOnMessage;
+  this.websocket.onerror = wsOnError;
+};
 ShellInABox.prototype.reconnect = function() {
   this.showReconnect(false);
-  if (!this.session) {
-    if (document.location.hash != '') {
+//  if (!this.session) {
+//    if (document.location.hash != '') {
       // A shellinaboxd daemon launched from a CGI only allows a single
       // session. In order to reconnect, we must reload the frame definition
       // and obtain a new port number. As this is a different origin, we
       // need to get enclosing page to help us.
-      parent.location        = this.nextUrl;
-    } else {
-      if (this.url != this.nextUrl) {
-        document.location.replace(this.nextUrl);
-      } else {
+//      parent.location        = this.nextUrl;
+//    } else {
+//      if (this.url != this.nextUrl) {
+//        document.location.replace(this.nextUrl);
+//      } else {
+	this.connect();
         this.pendingKeys     = '';
         this.keysInFlight    = false;
         this.reset(true);
         this.sendRequest();
-      }
-    }
-  }
+//      }
+//    }
+//  }
   return false;
 };
 
 ShellInABox.prototype.sendRequest = function(request) {
+  if (!this.websocket || this.websocket.readyState != WebSocket.OPEN) {
+    return;
+  }
 
+/*
   var content                = 'width=' + this.terminalWidth +
                                '&height=' + this.terminalHeight +
                                (this.session ? '&session=' +
                                 encodeURIComponent(this.session) : '&rooturl='+
                                 encodeURIComponent(this.rooturl));
+  this.websocket.send(content);
+  */
+  var content                = 'S ' + this.terminalWidth +
+                               ' ' + this.terminalHeight;
   this.websocket.send(content);
 };
 
@@ -254,20 +273,25 @@ ShellInABox.prototype.onReadyStateChange = function(request) {
 };
 
 ShellInABox.prototype.sendKeys = function(keys) {
-  if (!this.connected) {
+  //if (!this.connected) {
+  if (!this.websocket || this.websocket.readyState != WebSocket.OPEN) {
     return;
   }
-  if (this.keysInFlight || this.session == undefined) {
+  //if (this.keysInFlight || this.session == undefined) {
+  if (this.keysInFlight) {
     this.pendingKeys          += keys;
   } else {
-    this.keysInFlight          = true;
+//    this.keysInFlight          = true;
     keys                       = this.pendingKeys + keys;
     this.pendingKeys           = '';
-    var request                = new XMLHttpRequest();
+	console.log("pending: " + keys);
+   // var request                = new XMLHttpRequest();
+   /*
     var content                = 'width=' + this.terminalWidth +
                                  '&height=' + this.terminalHeight +
                                  '&session=' +encodeURIComponent(this.session)+
                                  '&keys=' + encodeURIComponent(keys);
+								 */
     /*request.onreadystatechange = function(shellInABox) {
       return function() {
                try {
@@ -277,7 +301,7 @@ ShellInABox.prototype.sendKeys = function(keys) {
              }
       }(this);
 	  */
-	this.websocket.send(content);
+	this.websocket.send('K ' + keys);
   }
 };
 
@@ -325,10 +349,10 @@ ShellInABox.prototype.keysPressed = function(ch) {
 
 ShellInABox.prototype.resized = function(w, h) {
   // Do not send a resize request until we are fully initialized.
-  if (this.session) {
-    // sendKeys() always transmits the current terminal size. So, flush all
-    // pending keys.
-    this.sendKeys('');
+//  if (this.session) {
+  if (this.websocket && this.websocket.readyState == WebSocket.OPEN) {
+ // console.log("Resize: " + this.terminalWidth + " " + this.terminalHeight);
+	this.websocket.send('S ' + this.terminalWidth + ' ' + this.terminalHeight);
   }
 };
 

@@ -70,7 +70,6 @@
 #include <sys/prctl.h>
 #endif
 
-#include "libhttp/http.h"
 #include "logging/logging.h"
 #include "shellinabox/externalfile.h"
 #include "shellinabox/launcher.h"
@@ -125,7 +124,7 @@ static sigjmp_buf     jmpenv;
 static volatile int   exiting;
 
 // Tangelo: Web Socket Callbacks and Definitions, mostly using example libwebsockets server
-
+static char *jsonEscape(const char *buf, int len);
 static struct libwebsocket_context *wsContext;
 
 enum ws_protocols {
@@ -231,7 +230,6 @@ static int callback_http(struct libwebsocket_context *context,
           !strncasecmp(contentType, "application/x-www-form-urlencoded", 33)) {
         // XMLHttpRequest carrying data between the AJAX application and the
         // client session.
-		printf("AJAX\n");
      //   return dataHandler(http, arg, buf, len, url);
       }
 */	  
@@ -555,8 +553,13 @@ try_to_reuse:
 
 struct per_session_data__shell {
   struct libwebsocket *wsi;
-  int ringbuffer_tail;
-  struct Service *service;
+  int                 ringbuffer_tail;
+  struct Service      *service;
+  int                 pty;
+  int                 width;
+  int                 height;
+  char                *buffered;
+  int                 len;
 };
 
 struct a_message {
@@ -586,7 +589,24 @@ callback_shell(struct libwebsocket_context *context,
     lwsl_info("callback_shell: LWS_CALLBACK_ESTABLISHED\n");
     pss->ringbuffer_tail = ringbuffer_head;
     pss->wsi = wsi;
+
+	//- Initialize Session -
+    pss->pty            = -1;
+    pss->width          = 0;
+    pss->height         = 0;
+    pss->buffered       = NULL;
+    pss->len            = 0;
+	printf("%lx: Connected\n", (unsigned long)pss);
+
     break;
+
+  case LWS_CALLBACK_CLOSED:
+    if (pss->pty >= 0) {
+      NOINTR(close(pss->pty));
+    }
+	printf("%lx: Disconnected\n", (unsigned long)pss);
+
+  	break;
 
   case LWS_CALLBACK_PROTOCOL_DESTROY:
     lwsl_notice("mirror protocol cleaning up\n");
@@ -637,10 +657,40 @@ callback_shell(struct libwebsocket_context *context,
       usleep(1);
 #endif
     }
+
+	// Read socket
+	if (pss->pty != -1 ) {
+	  char buf[MAX_RESPONSE];
+	  int bytes                     = 0;
+	    bytes                       = NOINTR(read(pss->pty, buf, MAX_RESPONSE));
+	    if (bytes > 0) {
+			char *rData = jsonEscape(buf, bytes);
+			//TODO: Use constants to generate padding
+          char *rJson        = stringPrintf(NULL, "%18s{"
+        //                                       "\"session\":\"%s\","
+                                               "\"data\":\"%s\""
+                                               "}%4s",
+                                               "", rData, "");
+//		  printf("PAD: %d %d\n", LWS_SEND_BUFFER_PRE_PADDING, LWS_SEND_BUFFER_POST_PADDING);
+	//		 printf("Json: %s\n", rJson);
+			 libwebsocket_write(wsi, (unsigned char *)(rJson + LWS_SEND_BUFFER_PRE_PADDING), strlen(rJson) - LWS_SEND_BUFFER_PRE_PADDING - LWS_SEND_BUFFER_POST_PADDING, LWS_WRITE_TEXT);
+			 free(rData);
+			 free(rJson);
+	    } else if(errno == EIO){
+			return -1;
+		}
+	}
+    libwebsocket_callback_on_writable(context, wsi);
+
+#ifdef _WIN32
+      Sleep(1);
+#else
+      usleep(1);
+#endif
+
     break;
 
   case LWS_CALLBACK_RECEIVE:
-
     if (((ringbuffer_head - pss->ringbuffer_tail) &
           (MAX_MESSAGE_QUEUE - 1)) == (MAX_MESSAGE_QUEUE - 1)) {
       lwsl_err("dropping!\n");
@@ -713,7 +763,6 @@ static struct libwebsocket_protocols wsProtocols[] = {
 
 // Tangelo: End
 
-/*
 static char *jsonEscape(const char *buf, int len) {
   static const char *hexDigit = "0123456789ABCDEF";
 
@@ -777,7 +826,6 @@ static char *jsonEscape(const char *buf, int len) {
   *dst++                      = '\000';
   return result;
 }
-*/
 
 /*
 static int printfUnchecked(const char *format, ...) {
@@ -941,7 +989,8 @@ char *getPeerName(int fd, int *port, int numericHosts);
 static int dataHandler(struct libwebsocket_context *context, struct libwebsocket *wsi,
     struct per_session_data__shell *pss,
     char *data, int size) {
-//  struct Service *service = pss->service;
+
+  struct Service *service = services[0];
   /*
   UNUSED(len);
   if (!buf) {
@@ -972,6 +1021,91 @@ static int dataHandler(struct libwebsocket_context *context, struct libwebsocket
     return HTTP_DONE;
   }
   */
+  if (size) {
+	  if (data[0] == 'S') {
+		  int i = 2;
+		  int w = atoi(&data[i]);
+		  while (data[i++] != ' ') { }
+		  int h = atoi(&data[i]);
+
+  int oldWidth            = pss->width;
+  int oldHeight           = pss->height;
+		  pss->width = w;
+		  pss->height = h;
+
+		  if (pss->pty == -1) {
+			  /*
+    if (keys) {
+    bad_new_session:
+      abandonSession(session);
+      httpSendReply(http, 400, "Bad Request", NO_MSG);
+      return HTTP_DONE;
+    }
+	*/
+			  const char *peerName = "test";
+			  const char *url = "/";
+		//    if (launchChild(service->id, session,
+		//                    rootURL && *rootURL ? rootURL : urlGetURL(url)) < 0) {
+		    if (launchChild(service->id, w, h, peerName, strlen(peerName),
+					&pss->pty, url) < 0) {
+		  //    abandonSession(session);
+//		      httpSendReply(http, 500, "Internal Error", NO_MSG);
+//		      return HTTP_DONE;
+	//			printf("Error Launching Child\n");
+		    } else {
+	//			printf("Launched Child\n");
+			}
+		  } else {
+  // Reset window dimensions of the pseudo TTY, if changed since last time set.
+  if (pss->width > 0 && pss->height > 0 &&
+      (pss->width != oldWidth || pss->height != oldHeight)) {
+//    printf("Window size changed to %dx%d\n", pss->width, pss->height);
+    setWindowSize(pss->pty, pss->width, pss->height);
+  }
+		  }
+	  } else if (data[0] == 'K' && pss->pty != -1) {
+  // Process keypresses, if any. Then send a synchronous reply.
+  const char *keys        = &data[2];
+  if (keys) {
+    char *keyCodes;
+    check(keyCodes        = malloc(strlen(keys)/2));
+    int len               = 0;
+    for (const unsigned char *ptr = (const unsigned char *)keys; ;) {
+      unsigned c0         = *ptr++;
+      if (c0 < '0' || (c0 > '9' && c0 < 'A') ||
+          (c0 > 'F' && c0 < 'a') || c0 > 'f') {
+        break;
+      }
+      unsigned c1         = *ptr++;
+      if (c1 < '0' || (c1 > '9' && c1 < 'A') ||
+          (c1 > 'F' && c1 < 'a') || c1 > 'f') {
+        break;
+      }
+      keyCodes[len++]     = 16*((c0 & 0xF) + 9*(c0 > '9')) +
+                                (c1 & 0xF) + 9*(c1 > '9');
+    }
+    if (write(pss->pty, keyCodes, len) < 0 && errno == EAGAIN) {
+//      completePendingRequest(session, "\007", 1, MAX_RESPONSE);
+    }
+    free(keyCodes);
+ //   httpSendReply(http, 200, "OK", " ");
+//    check(session->http != http);
+ //   return HTTP_DONE;
+  } else {
+    // This request is polling for data. Finish any pending requests and
+    // queue (or process) a new one.
+	/*
+    if (session->http && session->http != http &&
+        !completePendingRequest(session, "", 0, MAX_RESPONSE)) {
+      httpSendReply(http, 400, "Bad Request", NO_MSG);
+      return HTTP_DONE;
+    }
+    session->http         = http;
+	*/
+  }
+
+	  }
+  }
 
 /*  const HashMap *args     = urlGetArgs(session->url);
   int oldWidth            = session->width;
@@ -1020,53 +1154,7 @@ static int dataHandler(struct libwebsocket_context *context, struct libwebsocket
   }
   */
 
-  // Reset window dimensions of the pseudo TTY, if changed since last time set.
-  /*
-  if (session->width > 0 && session->height > 0 &&
-      (session->width != oldWidth || session->height != oldHeight)) {
-    debug("Window size changed to %dx%d", session->width, session->height);
-    setWindowSize(session->pty, session->width, session->height);
-  }
-  */
 
-  // Process keypresses, if any. Then send a synchronous reply.
-  /*
-  if (keys) {
-    char *keyCodes;
-    check(keyCodes        = malloc(strlen(keys)/2));
-    int len               = 0;
-    for (const unsigned char *ptr = (const unsigned char *)keys; ;) {
-      unsigned c0         = *ptr++;
-      if (c0 < '0' || (c0 > '9' && c0 < 'A') ||
-          (c0 > 'F' && c0 < 'a') || c0 > 'f') {
-        break;
-      }
-      unsigned c1         = *ptr++;
-      if (c1 < '0' || (c1 > '9' && c1 < 'A') ||
-          (c1 > 'F' && c1 < 'a') || c1 > 'f') {
-        break;
-      }
-      keyCodes[len++]     = 16*((c0 & 0xF) + 9*(c0 > '9')) +
-                                (c1 & 0xF) + 9*(c1 > '9');
-    }
-    if (write(session->pty, keyCodes, len) < 0 && errno == EAGAIN) {
-      completePendingRequest(session, "\007", 1, MAX_RESPONSE);
-    }
-    free(keyCodes);
-    httpSendReply(http, 200, "OK", " ");
-    check(session->http != http);
-    return HTTP_DONE;
-  } else {
-    // This request is polling for data. Finish any pending requests and
-    // queue (or process) a new one.
-    if (session->http && session->http != http &&
-        !completePendingRequest(session, "", 0, MAX_RESPONSE)) {
-      httpSendReply(http, 400, "Bad Request", NO_MSG);
-      return HTTP_DONE;
-    }
-    session->http         = http;
-  }
-  */
 
 /*
   session->connection     = serverGetConnection(session->server,
@@ -1771,7 +1859,7 @@ int main(int argc, char * const argv[]) {
 
   // Fork the launcher process, allowing us to drop privileges in the main
   // process.
- // int launcherFd  = forkLauncher();
+  int launcherFd  = forkLauncher();
 
   // Make sure that our timestamps will print in the standard format
   setlocale(LC_TIME, "POSIX");
