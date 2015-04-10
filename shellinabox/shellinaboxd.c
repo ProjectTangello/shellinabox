@@ -597,13 +597,13 @@ callback_shell(struct libwebsocket_context *context,
     pss->height = 0;
     pss->lastSendMS = 0;
 	pss->msg = pss->buffer + LWS_SEND_BUFFER_PRE_PADDING;
-    printf("%lx: Connected\n", (unsigned long)pss);
+//    printf("%lx: Connected\n", (unsigned long)pss);
     break;
 
   case LWS_CALLBACK_CLOSED:
     if (pss->pty >= 0)
       NOINTR(close(pss->pty));
-    printf("%lx: Disconnected\n", (unsigned long)pss);
+//    printf("%lx: Disconnected\n", (unsigned long)pss);
     break;
 
   case LWS_CALLBACK_PROTOCOL_DESTROY:
