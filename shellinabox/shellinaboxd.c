@@ -62,6 +62,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <time.h>
 
 // Tangelo: Include libwebsockets
 #include <libwebsockets.h>
@@ -100,7 +101,7 @@
 #include "shellinabox/vt100.h"
 
 #define PORTNUM           4200
-#define MAX_RESPONSE      2048
+#define MAX_RESPONSE      4095
 
 static int            port;
 static int            portMin;
@@ -124,7 +125,7 @@ static sigjmp_buf     jmpenv;
 static volatile int   exiting;
 
 // Tangelo: Web Socket Callbacks and Definitions, mostly using example libwebsockets server
-static char *jsonEscape(const char *buf, int len);
+//static char *jsonEscape(const char *buf, int len);
 static struct libwebsocket_context *wsContext;
 
 enum ws_protocols {
@@ -136,6 +137,13 @@ enum ws_protocols {
   /* always last */
   WS_PROTOCOL_COUNT
 };
+
+static unsigned long long getTimeMS()
+{
+  struct timespec spec;
+  clock_gettime(CLOCK_REALTIME, &spec);
+  return spec.tv_sec * 1000 + spec.tv_nsec / 1000000;
+}
 
 // HTTP Protocol
 
@@ -550,8 +558,9 @@ struct per_session_data__shell {
   int                 pty;
   int                 width;
   int                 height;
-  char                *buffered;
-  int                 len;
+  long long           lastSendMS;
+  char                buffer[MAX_RESPONSE + LWS_SEND_BUFFER_PRE_PADDING + LWS_SEND_BUFFER_POST_PADDING];
+  char                *msg;
 };
 
 struct a_message {
@@ -582,20 +591,19 @@ callback_shell(struct libwebsocket_context *context,
     pss->ringbuffer_tail = ringbuffer_head;
     pss->wsi = wsi;
 
-  //- Initialize Session -
-    pss->pty            = -1;
-    pss->width          = 0;
-    pss->height         = 0;
-    pss->buffered       = NULL;
-    pss->len            = 0;
-  printf("%lx: Connected\n", (unsigned long)pss);
-
+    //- Initialize Session -
+    pss->pty = -1;
+    pss->width = 0;
+    pss->height = 0;
+    pss->lastSendMS = 0;
+	pss->msg = pss->buffer + LWS_SEND_BUFFER_PRE_PADDING;
+    printf("%lx: Connected\n", (unsigned long)pss);
     break;
 
   case LWS_CALLBACK_CLOSED:
     if (pss->pty >= 0)
       NOINTR(close(pss->pty));
-  printf("%lx: Disconnected\n", (unsigned long)pss);
+    printf("%lx: Disconnected\n", (unsigned long)pss);
     break;
 
   case LWS_CALLBACK_PROTOCOL_DESTROY:
@@ -644,23 +652,22 @@ callback_shell(struct libwebsocket_context *context,
 
     // Read socket
     if (pss->pty != -1 ) {
-      char buf[MAX_RESPONSE];
-      int bytes                     = 0;
-      bytes                       = NOINTR(read(pss->pty, buf, MAX_RESPONSE));
-      if (bytes > 0) {
-        char *rData = jsonEscape(buf, bytes);
-        //TODO: Use constants to generate padding
-        char *rJson        = stringPrintf(NULL, "%18s{"
-        //                                       "\"session\":\"%s\","
-                                               "\"data\":\"%s\""
-                                               "}%4s",
-                                               "", rData, "");
-//      printf("PAD: %d %d\n", LWS_SEND_BUFFER_PRE_PADDING, LWS_SEND_BUFFER_POST_PADDING);
-//      printf("Json: %s\n", rJson);
-        libwebsocket_write(wsi, (unsigned char *)(rJson + LWS_SEND_BUFFER_PRE_PADDING), strlen(rJson) - LWS_SEND_BUFFER_PRE_PADDING - LWS_SEND_BUFFER_POST_PADDING, LWS_WRITE_TEXT);
-        free(rData);
-        free(rJson);
-      } else if(errno == EIO)
+      unsigned long long timeMS = getTimeMS();
+	  if ((timeMS - pss->lastSendMS) < 16) {
+        libwebsocket_callback_on_writable(context, wsi);
+#ifdef _WIN32
+        Sleep(1);
+#else
+        usleep(1);
+#endif
+        return 0;
+	  }
+      pss->lastSendMS = timeMS;
+
+      int bytes = NOINTR(read(pss->pty, pss->msg, MAX_RESPONSE));
+      if (bytes > 0)
+        libwebsocket_write(wsi, (unsigned char *)pss->msg, bytes, LWS_WRITE_TEXT);
+      else if(errno == EIO)
         return -1;
     }
     libwebsocket_callback_on_writable(context, wsi);
@@ -746,6 +753,7 @@ static struct libwebsocket_protocols wsProtocols[] = {
 
 // Tangelo: End
 
+/*
 static char *jsonEscape(const char *buf, int len) {
   static const char *hexDigit = "0123456789ABCDEF";
 
@@ -809,6 +817,7 @@ static char *jsonEscape(const char *buf, int len) {
   *dst++                      = '\000';
   return result;
 }
+*/
 
 /*
 static int printfUnchecked(const char *format, ...) {

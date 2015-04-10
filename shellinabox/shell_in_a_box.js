@@ -116,10 +116,7 @@ function wsOnClose(evt) {
   shell.sessionClosed();
 }
 function wsOnMessage(evt) {
-  var response   = eval('(' + evt.data + ')');
-  if (response.data) {
-    shell.vt100(response.data);
-  }
+  shell.vt100(evt.data);
 //  console.log("wsOnMessage: " + evt.data);
 }
 function wsOnError(evt) {
@@ -251,7 +248,6 @@ ShellInABox.prototype.sendKeys = function(keys) {
 //    this.keysInFlight          = true;
     keys                       = this.pendingKeys + keys;
     this.pendingKeys           = '';
-  console.log("pending: " + keys);
    // var request                = new XMLHttpRequest();
    /*
     var content                = 'width=' + this.terminalWidth +
