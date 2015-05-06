@@ -500,7 +500,7 @@ static int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf, size_t buflen,
 #endif
 
 //int launchChild(int service, struct Session *session, const char *url) {
-int launchChild(int service, int width, int height, char *peerName, int peerNameSize, int *ptyPtr, const char *url) {
+int launchChild(int service, int width, int height, char *peerName, int peerNameSize, int *ptyPtr, const char *url, char *userName, int userNameSize) {
   if (launcher < 0) {
     errno              = EINVAL;
     return -1;
@@ -529,6 +529,8 @@ int launchChild(int service, int width, int height, char *peerName, int peerName
 //          sizeof(request->peerName) - 1);
   strncat(request->peerName, peerName,
           peerNameSize);
+  memset(request->userName, 0, sizeof(request->userName));
+  memcpy(request->userName, userName, userNameSize);
   request->urlLength   = strlen(u);
   memcpy(&request->url, u, request->urlLength);
   free(u);
@@ -1455,7 +1457,7 @@ void setWindowSize(int pty, int width, int height) {
 
 static void childProcess(struct Service *service, int width, int height,
                          struct Utmp *utmp, const char *peerName,
-                         const char *url) {
+                         const char *url, const char *userName) {
   // Set initial window size
   setWindowSize(0, width, height);
 
@@ -1581,10 +1583,13 @@ static void childProcess(struct Service *service, int width, int height,
 
   // Finally, launch the child process.
   if (service->useLogin == 1) {
+	execle("/bin/su", "su", userName, (void *)0, environment);
+/*
     execle("/bin/login", "login", "-p", "-h", peerName,
            (void *)0, environment);
     execle("/usr/bin/login", "login", "-p", "-h", peerName,
            (void *)0, environment);
+	*/
   } else {
     execService(width, height, service, peerName, environment, url);
   }
@@ -1676,7 +1681,7 @@ static void launcherDaemon(int fd) {
                                         services[request.service]->useLogin,
                                         &utmp, request.peerName)) == 0) {
       childProcess(services[request.service], request.width, request.height,
-                   utmp, request.peerName, url);
+                   utmp, request.peerName, url, request.userName);
       free(url);
       _exit(1);
     } else {

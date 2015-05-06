@@ -107,7 +107,7 @@ function get_appropriate_ws_url()
 
   /* + "/xxx" bit is for IE10 workaround */
 
-  return pcol + u[0] + "/xxx";
+  return pcol + u[0] + "/xxx" + window.location.search;
 }
 function wsOnOpen(evt) {
   this.shell.sendRequest();

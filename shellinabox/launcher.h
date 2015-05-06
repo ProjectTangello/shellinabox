@@ -55,13 +55,14 @@ struct LaunchRequest {
   int  service;
   int  width, height;
   char peerName[128];
+  char userName[64];
   int  urlLength;
   char url[0];
 };
 
 int  supportsPAM(void);
 //int  launchChild(int service, struct Session *session, const char *url);
-int  launchChild(int service, int width, int height, char *peerName, int peerNameSize, int *ptyPtr, const char *url);
+int  launchChild(int service, int width, int height, char *peerName, int peerNameSize, int *ptyPtr, const char *url, char *userName, int userNameSize);
 void setWindowSize(int pty, int width, int height);
 int  forkLauncher(void);
 void terminateLauncher(void);

@@ -228,7 +228,6 @@ static int callback_http(struct libwebsocket_context *context,
 
     // Tangelo: Attempt to serve files from memory
     const char *pathInfo = (const char *)in + 1;
-//  printf("GET: %s\n", pathInfo);
     int pathInfoLength = strlen (pathInfo);
     if (!pathInfoLength ||
         (pathInfoLength == 5 && !memcmp(pathInfo, "plain", 5)) ||
@@ -510,31 +509,6 @@ bail:
       close(pss->fd);
     return -1;
 
-  /*
-   * callback for confirming to continue with client IP appear in
-   * protocol 0 callback since no websocket protocol has been agreed
-   * yet.  You can just ignore this if you won't filter on client IP
-   * since the default uhandled callback return is 0 meaning let the
-   * connection continue.
-   */
-
-  case LWS_CALLBACK_FILTER_NETWORK_CONNECTION:
-
-    /* if we returned non-zero from here, we kill the connection */
-    break;
-
-  case LWS_CALLBACK_GET_THREAD_ID:
-    /*
-     * if you will call "libwebsocket_callback_on_writable"
-     * from a different thread, return the caller thread ID
-     * here so lws can use this information to work out if it
-     * should signal the poll() loop to exit and restart early
-     */
-
-    /* return pthread_getthreadid_np(); */
-
-    break;
-
   default:
     break;
   }
@@ -561,6 +535,8 @@ struct per_session_data__shell {
   long long           lastSendMS;
   char                buffer[MAX_RESPONSE + LWS_SEND_BUFFER_PRE_PADDING + LWS_SEND_BUFFER_POST_PADDING];
   char                *msg;
+  int sessionFound;
+  char userName[64];
 };
 
 struct a_message {
@@ -721,10 +697,64 @@ done:
    * to handle this callback
    */
 
-  case LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION:
-//    dump_handshake_info(wsi);
-    /* you could return non-zero here and kill the connection */
+  case LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION: {
+    int n = 0;
+    char buf[256];
+    const unsigned char *c;
+    do {
+      c = lws_token_to_string((enum lws_token_indexes)n);
+      if (!c) {
+        n++;
+        continue;
+      }
+  
+      if (!lws_hdr_total_length(wsi, (enum lws_token_indexes)n)) {
+        n++;
+        continue;
+      }
+  
+      lws_hdr_copy(wsi, buf, sizeof buf, (enum lws_token_indexes)n);
+
+      if (strlen((const char *)c) == 0) {
+        char *search = strstr(buf, "session_id=");
+        if (search != 0) {
+          char sessID[65];
+          sessID[64] = 0;
+          if (sscanf(search, "session_id=%[0-9a-zA-Z]&", sessID) == 1) {
+            FILE *file;
+            char buf[128];
+            memset(buf, 0, 128);
+            sprintf(buf, "/opt/tangelo_sessions/%s.session", sessID);
+            if ((file = fopen(buf, "r"))) {
+              memset(buf, 0, 128);
+              char *r = fgets(buf, 128, file);
+              fclose(file);
+              UNUSED(r);
+              sscanf(buf, "%[0-9a-zA-Z]", pss->userName);
+              if (strlen(pss->userName) == 0)
+                continue;
+              memset(buf, 0, 128);
+              sprintf(buf, "/bin/sh -c \"if id -u %s >/dev/null 2>&1; then echo 1; else echo 0; fi\"", pss->userName);
+              file = popen(buf, "r");
+              memset(buf, 0, 128);
+              r = fgets(buf, 128, file);
+              pclose(file);
+              if (atoi(buf) == 1) {
+                pss->sessionFound = 1;
+                printf("%lx => %s\n", (unsigned long)pss, pss->userName);
+              }
+            }
+          }
+        }
+      }
+
+      n++;
+    } while (c);
+
+    if (pss->sessionFound == 0)
+      return -1;
     break;
+  }
 
   default:
     break;
@@ -1037,7 +1067,7 @@ static int dataHandler(struct libwebsocket_context *context, struct libwebsocket
         const char *peerName = "test";
         const char *url = "/";
         if (launchChild(service->id, w, h, (char *)peerName, strlen(peerName),
-          &pss->pty, url) < 0) {
+          &pss->pty, url, pss->userName, strlen(pss->userName)) < 0) {
 //        abandonSession(session);
 //        httpSendReply(http, 500, "Internal Error", NO_MSG);
 //        return HTTP_DONE;
