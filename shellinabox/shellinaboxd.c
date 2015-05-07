@@ -527,6 +527,8 @@ try_to_reuse:
 
 struct per_session_data__shell {
   struct libwebsocket *wsi;
+  struct a_message *ringbuffer;
+  int ringbuffer_head;
   int                 ringbuffer_tail;
   struct Service      *service;
   int                 pty;
@@ -548,8 +550,6 @@ static int dataHandler(struct libwebsocket_context *context, struct libwebsocket
     struct per_session_data__shell *pss,
     char *data, int size);
 
-static struct a_message ringbuffer[MAX_MESSAGE_QUEUE];
-static int ringbuffer_head;
 
 static int
 callback_shell(struct libwebsocket_context *context,
@@ -564,7 +564,10 @@ callback_shell(struct libwebsocket_context *context,
 
   case LWS_CALLBACK_ESTABLISHED:
     lwsl_info("callback_shell: LWS_CALLBACK_ESTABLISHED\n");
-    pss->ringbuffer_tail = ringbuffer_head;
+    pss->ringbuffer = (struct a_message *)malloc(sizeof(struct a_message) * MAX_MESSAGE_QUEUE);
+	memset(pss->ringbuffer, 0, sizeof(struct a_message) * MAX_MESSAGE_QUEUE);
+  	pss->ringbuffer_head = 0;
+    pss->ringbuffer_tail = 0;
     pss->wsi = wsi;
 
     //- Initialize Session -
@@ -579,22 +582,22 @@ callback_shell(struct libwebsocket_context *context,
   case LWS_CALLBACK_CLOSED:
     if (pss->pty >= 0)
       NOINTR(close(pss->pty));
+    for (n = 0; n < sizeof pss->ringbuffer / sizeof pss->ringbuffer[0]; n++)
+      if (pss->ringbuffer[n].payload)
+        free(pss->ringbuffer[n].payload);
+    free(pss->ringbuffer);
 //    printf("%lx: Disconnected\n", (unsigned long)pss);
     break;
 
   case LWS_CALLBACK_PROTOCOL_DESTROY:
-    lwsl_notice("mirror protocol cleaning up\n");
-    for (n = 0; n < sizeof ringbuffer / sizeof ringbuffer[0]; n++)
-      if (ringbuffer[n].payload)
-        free(ringbuffer[n].payload);
     break;
 
   case LWS_CALLBACK_SERVER_WRITEABLE:
-    while (pss->ringbuffer_tail != ringbuffer_head) {
+    while (pss->ringbuffer_tail != pss->ringbuffer_head) {
 
       int ret = dataHandler(context, wsi, pss,
-        (char *)ringbuffer[pss->ringbuffer_tail].payload + LWS_SEND_BUFFER_PRE_PADDING,
-        ringbuffer[pss->ringbuffer_tail].len);
+        (char *)pss->ringbuffer[pss->ringbuffer_tail].payload + LWS_SEND_BUFFER_PRE_PADDING,
+        pss->ringbuffer[pss->ringbuffer_tail].len);
       if (ret) {
         //TODO: Handle error
       }
@@ -604,7 +607,7 @@ callback_shell(struct libwebsocket_context *context,
       else
         pss->ringbuffer_tail++;
 
-      if (((ringbuffer_head - pss->ringbuffer_tail) &
+      if (((pss->ringbuffer_head - pss->ringbuffer_tail) &
           (MAX_MESSAGE_QUEUE - 1)) == (MAX_MESSAGE_QUEUE - 15))
         libwebsocket_rx_flow_allow_all_protocol(
                  libwebsockets_get_protocol(wsi));
@@ -657,27 +660,27 @@ callback_shell(struct libwebsocket_context *context,
     break;
 
   case LWS_CALLBACK_RECEIVE:
-    if (((ringbuffer_head - pss->ringbuffer_tail) &
+    if (((pss->ringbuffer_head - pss->ringbuffer_tail) &
           (MAX_MESSAGE_QUEUE - 1)) == (MAX_MESSAGE_QUEUE - 1)) {
       lwsl_err("dropping!\n");
       goto choke;
     }
 
-    if (ringbuffer[ringbuffer_head].payload)
-      free(ringbuffer[ringbuffer_head].payload);
+    if (pss->ringbuffer[pss->ringbuffer_head].payload)
+      free(pss->ringbuffer[pss->ringbuffer_head].payload);
 
-    ringbuffer[ringbuffer_head].payload =
+    pss->ringbuffer[pss->ringbuffer_head].payload =
         malloc(LWS_SEND_BUFFER_PRE_PADDING + len +
               LWS_SEND_BUFFER_POST_PADDING);
-    ringbuffer[ringbuffer_head].len = len;
-    memcpy((char *)ringbuffer[ringbuffer_head].payload +
+    pss->ringbuffer[pss->ringbuffer_head].len = len;
+    memcpy((char *)pss->ringbuffer[pss->ringbuffer_head].payload +
             LWS_SEND_BUFFER_PRE_PADDING, in, len);
-    if (ringbuffer_head == (MAX_MESSAGE_QUEUE - 1))
-      ringbuffer_head = 0;
+    if (pss->ringbuffer_head == (MAX_MESSAGE_QUEUE - 1))
+      pss->ringbuffer_head = 0;
     else
-      ringbuffer_head++;
+      pss->ringbuffer_head++;
 
-    if (((ringbuffer_head - pss->ringbuffer_tail) &
+    if (((pss->ringbuffer_head - pss->ringbuffer_tail) &
           (MAX_MESSAGE_QUEUE - 1)) != (MAX_MESSAGE_QUEUE - 2))
       goto done;
 
@@ -739,10 +742,8 @@ done:
               memset(buf, 0, 128);
               r = fgets(buf, 128, file);
               pclose(file);
-              if (atoi(buf) == 1) {
+              if (atoi(buf) == 1)
                 pss->sessionFound = 1;
-                printf("%lx => %s\n", (unsigned long)pss, pss->userName);
-              }
             }
           }
         }
